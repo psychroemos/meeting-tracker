@@ -1,289 +1,285 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Ministry Helper</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1/dist/leaflet.css">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-  <link rel="stylesheet" href="styles.css">
-  <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#6C5CE7">
-  <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <script src="https://cdn.jsdelivr.net/npm/leaflet@1/dist/leaflet.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meeting Assignment Tracker</title>
+    <link rel="stylesheet" href="lib/tailwind-utilities.css">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#374151">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Assignment Tracker">
+    <script src="lib/xlsx.bundle.min.js"></script>
+    <script src="lib/jspdf.umd.min.js"></script>
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div class="app">
-  <div class="app-header">
-    <h1><i class="fas fa-book-open"></i> Ministry Helper</h1>
-  </div>
-<div class="page-container">
-<!-- DASHBOARD -->
-    <div class="page active" id="pageDashboard">
-      <div class="month-nav">
-        <button class="header-btn" onclick="changeMonth(-1)"><i class="fas fa-chevron-left"></i></button>
-        <span id="dashMonthLabel"></span>
-        <button class="header-btn" onclick="changeMonth(1)"><i class="fas fa-chevron-right"></i></button>
-      </div>
-<!-- Goal Progress Ring -->
-      <div id="goalSection" class="goal-ring-card hidden">
-        <div class="goal-ring-wrapper">
-          <svg class="goal-ring-svg" viewBox="0 0 120 120">
-            <circle class="goal-ring-bg" cx="60" cy="60" r="52"></circle>
-            <circle class="goal-ring-fill" id="goalRing" cx="60" cy="60" r="52"></circle>
-          </svg>
-          <div class="goal-ring-text">
-            <div class="goal-ring-pct" id="goalPct">0%</div>
-            <div class="goal-ring-label">of goal</div>
-          </div>
-        </div>
-        <div class="goal-ring-info">
-          <div class="goal-ring-title">Monthly Goal</div>
-          <div class="goal-ring-detail" id="goalDetail">0 / 0 hrs</div>
-        </div>
-      </div>
-<div class="stats-grid" id="dashStats"></div>
-<div id="calendarWrap">
-<div class="section-title"><i class="fas fa-calendar-alt"></i> Ministry Planner</div>
-<div class="card" id="calendarSection"></div>
-</div>
-<div class="section-title"><i class="fas fa-calendar-check"></i> Upcoming Visits</div>
-      <div id="upcomingList"></div>
-    </div>
-<!-- TIME TRACKER -->
-    <div class="page" id="pageTime">
-      <div class="tabs" id="timeTabs">
-        <button class="tab active" onclick="switchTimeTab('entry',this)">Manual</button>
-        <button class="tab" onclick="switchTimeTab('stopwatch',this)">Stopwatch</button>
-        <button class="tab" onclick="switchTimeTab('log',this)">History</button>
-      </div>
-      <div id="timeEntry">
-        <div class="card">
-          <div class="form-group">
-            <label class="form-label">Date</label>
-            <input type="date" class="form-input" id="timeDate">
-          </div>
-          <div class="form-row-2col">
-            <div class="form-group">
-              <label class="form-label">Hours</label>
-              <input type="number" class="form-input" id="timeHours" min="0" max="24" value="0">
+    <div class="min-h-screen p-6">
+        <div class="max-w-7xl mx-auto">
+            <!-- Header -->
+            <div class="card p-8 mb-8">
+                <h1 class="text-4xl font-bold text-gray-900 mb-2">📋 Meeting Assignment Tracker</h1>
+                <p class="text-gray-600 text-lg">Manage Thursday midweek meeting assignments fairly & easily</p>
             </div>
-            <div class="form-group">
-              <label class="form-label">Minutes</label>
-              <input type="number" class="form-input" id="timeMins" min="0" max="59" value="0">
-            </div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Notes (optional)</label>
-            <input type="text" class="form-input" id="timeNotes" placeholder="Add notes...">
-          </div>
-          <button class="btn btn-primary btn-block" onclick="saveTimeEntry()"><i class="fas fa-plus"></i> Add Entry</button>
-        </div>
-      </div>
-      <div id="timeStopwatch" class="hidden">
-        <div class="card">
-          <div class="stopwatch">
-            <div class="sw-display" id="swDisplay">00:00:00</div>
-            <div class="sw-controls">
-              <button class="sw-btn reset" onclick="resetSW()"><i class="fas fa-undo"></i></button>
-              <button class="sw-btn start" onclick="toggleSW()" id="swToggle"><i class="fas fa-play"></i></button>
-              <button class="sw-btn stop hidden" onclick="saveSW()" id="swSave"><i class="fas fa-save"></i></button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div id="timeLog" class="hidden">
-        <div class="tabs" id="logTabs">
-          <button class="tab active" onclick="switchLogView('monthly',this)">Monthly</button>
-          <button class="tab" onclick="switchLogView('cumulative',this)">Cumulative</button>
-        </div>
-        <div id="timeLogContent"></div>
-      </div>
-    </div>
-<!-- CONTACTS -->
-    <div class="page" id="pageContacts">
-      <div class="search-bar">
-        <i class="fas fa-search"></i>
-        <input type="text" placeholder="Search contacts..." id="contactSearch" oninput="renderContacts()">
-      </div>
-      <div class="filter-row">
-        <button class="chip active" onclick="filterContacts('all',this)">All</button>
-        <button class="chip" onclick="filterContacts('bs',this)">Bible Study</button>
-        <button class="chip" onclick="filterContacts('rv',this)">Return Visit</button>
-      </div>
-      <div id="contactList"></div>
-    </div>
-<!-- CONTACT DETAIL -->
-    <div class="page" id="pageDetail">
-      <div class="detail-header">
-        <button class="detail-back" onclick="showPage('contacts')"><i class="fas fa-arrow-left"></i></button>
-        <div>
-          <div id="detailName" class="detail-name"></div>
-          <div id="detailType" class="detail-type"></div>
-        </div>
-      </div>
-      <div class="detail-actions">
-        <button class="btn btn-secondary btn-sm" onclick="editContact()"><i class="fas fa-edit"></i> Edit</button>
-        <button class="btn btn-secondary btn-sm" onclick="addVisitLog()"><i class="fas fa-plus"></i> Add Visit</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteContact()"><i class="fas fa-trash"></i></button>
-      </div>
-      <div class="card" id="detailInfo"></div>
-      <div class="section-title mt-16"><i class="fas fa-history"></i> Visit History</div>
-      <div id="detailVisits"></div>
-    </div>
-<!-- MAP -->
-    <div class="page" id="pageMap">
-      <div class="map-legend">
-        <div class="legend-item"><div class="legend-dot bs"></div> Bible Study</div>
-        <div class="legend-item"><div class="legend-dot rv"></div> Return Visit</div>
-      </div>
-      <div id="mapContainer"></div>
-      <div id="mapContactList"></div>
-    </div>
-<!-- REPORTS -->
-    <div class="page" id="pageReports">
-      <div class="month-nav">
-        <button class="header-btn" onclick="changeReportMonth(-1)"><i class="fas fa-chevron-left"></i></button>
-        <span id="reportMonthLabel"></span>
-        <button class="header-btn" onclick="changeReportMonth(1)"><i class="fas fa-chevron-right"></i></button>
-      </div>
-      <div id="reportCard"></div>
-      <div class="section-title mt-8"><i class="fas fa-chart-line"></i> Hours Trend</div>
-      <div id="reportTrend"></div>
-      <div class="section-title mt-16"><i class="fas fa-clipboard-list"></i> Activity Summary</div>
-      <div id="reportActivity"></div>
-      <div class="section-title mt-16"><i class="fas fa-calendar-alt"></i> Service Year Cumulative</div>
-      <div id="reportCumulative"></div>
-    </div>
-<!-- SETTINGS -->
-    <div class="page" id="pageSettings">
-      <div class="section-title"><i class="fas fa-bullseye"></i> Goals</div>
-      <div class="card">
-        <div class="form-group">
-          <label class="form-label">Monthly Hour Goal</label>
-          <input type="number" class="form-input" id="goalHours" min="0" value="0" onchange="saveSettings()">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Monthly Bible Studies Goal</label>
-          <input type="number" class="form-input" id="goalStudies" min="0" value="0" onchange="saveSettings()">
-        </div>
-      </div>
-      <div class="section-title"><i class="fas fa-database"></i> Data Management</div>
-      <div class="card">
-        <button class="btn btn-secondary btn-block mb-10" onclick="exportData()"><i class="fas fa-download"></i> Export Data (JSON)</button>
-        <button class="btn btn-secondary btn-block" onclick="document.getElementById('importFile').click()"><i class="fas fa-upload"></i> Import Data (JSON)</button>
-        <input type="file" id="importFile" accept=".json" class="hidden" onchange="importData(event)">
-        <button class="btn btn-danger btn-block mt-10" onclick="clearAllData()"><i class="fas fa-trash"></i> Clear All Data</button>
-      </div>
-      <div class="section-title"><i class="fas fa-info-circle"></i> About</div>
-      <div class="card">
-        <p class="about-text">
-          <strong>Ministry Helper</strong> v1.2<br>
-          Personal field service tracker with map, goal calendar, and reports.<br>
-          All data is stored locally on your device.
-        </p>
-      </div>
-    </div>
-</div>
-<nav class="bottom-nav">
-    <button class="nav-item active" onclick="showPage('dashboard')"><i class="fas fa-home"></i><span>Home</span></button>
-    <button class="nav-item" onclick="showPage('time')"><i class="fas fa-clock"></i><span>Time</span></button>
-    <button class="nav-item" onclick="showPage('contacts')"><i class="fas fa-users"></i><span>Contacts</span></button>
-    <button class="nav-item" onclick="showPage('map')"><i class="fas fa-map-marked-alt"></i><span>Map</span></button>
-    <button class="nav-item" onclick="showPage('reports')"><i class="fas fa-chart-pie"></i><span>Report</span></button>
-    <button class="nav-item" onclick="showPage('settings')"><i class="fas fa-cog"></i><span>Settings</span></button>
-  </nav>
-<button class="btn-fab hidden" id="fabAdd" onclick="openAddContact()"><i class="fas fa-plus"></i></button>
-</div>
-<!-- ADD/EDIT CONTACT MODAL -->
-<div class="modal-overlay" id="contactModal">
-  <div class="modal">
-    <div class="modal-handle"></div>
-    <div class="modal-title" id="contactModalTitle">Add Contact</div>
-    <input type="hidden" id="editContactId">
-    <div class="form-group">
-      <label class="form-label">Name</label>
-      <input type="text" class="form-input" id="cName" placeholder="Full name">
-    </div>
-    <div class="form-group">
-      <label class="form-label">Type</label>
-      <select class="form-select" id="cType">
-        <option value="bs">Bible Study</option>
-        <option value="rv">Return Visit</option>
-      </select>
-    </div>
-    <div class="form-group">
-      <label class="form-label">Address</label>
-      <input type="text" class="form-input" id="cAddress" placeholder="Full address">
-    </div>
-    <div class="form-group">
-      <label class="form-label">Notes</label>
-      <textarea class="form-textarea" id="cNotes" placeholder="Publications left, topics discussed..."></textarea>
-    </div>
-    <div class="form-group">
-      <label class="form-label">Next Visit</label>
-      <input type="date" class="form-input" id="cNextVisit">
-    </div>
-    <div class="form-group">
-      <label class="form-label">Location (optional)</label>
-      <div class="location-inputs">
-        <input type="text" class="form-input flex-1" id="cLat" placeholder="Latitude">
-        <input type="text" class="form-input flex-1" id="cLng" placeholder="Longitude">
-        <button class="btn btn-secondary btn-sm" onclick="getGPS()" title="Use current location"><i class="fas fa-crosshairs"></i></button>
-      </div>
-      <div class="picker-toggle" onclick="toggleMapPicker()">
-        <i class="fas fa-map-marker-alt"></i> Or tap the map to set location
-      </div>
-      <div id="mapPickerContainer" class="map-picker hidden"></div>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary flex-1" onclick="closeModal('contactModal')">Cancel</button>
-      <button class="btn btn-primary flex-1" onclick="saveContact()"><i class="fas fa-check"></i> Save</button>
-    </div>
-  </div>
-</div>
-<!-- ADD VISIT LOG MODAL -->
-<div class="modal-overlay" id="visitModal">
-  <div class="modal">
-    <div class="modal-handle"></div>
-    <div class="modal-title">Add Visit Log</div>
-    <div class="form-group">
-      <label class="form-label">Date</label>
-      <input type="date" class="form-input" id="vDate">
-    </div>
-    <div class="form-group">
-      <label class="form-label">Notes</label>
-      <textarea class="form-textarea" id="vNotes" placeholder="What was discussed?"></textarea>
-    </div>
-    <div class="form-group">
-      <label class="form-label">Next Visit</label>
-      <input type="date" class="form-input" id="vNextVisit">
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary flex-1" onclick="closeModal('visitModal')">Cancel</button>
-      <button class="btn btn-primary flex-1" onclick="saveVisitLog()"><i class="fas fa-check"></i> Save</button>
-    </div>
-  </div>
-</div>
-<!-- PLAN DAY MODAL -->
-<div class="modal-overlay" id="planModal">
-  <div class="modal">
-    <div class="modal-handle"></div>
-    <div class="modal-title">Plan Ministry</div>
-    <div id="planModalDate" class="plan-modal-date"></div>
-    <div id="planActual" class="plan-modal-actual"></div>
-    <div class="form-group">
-      <label class="form-label">Planned Hours</label>
-      <input type="number" class="form-input" id="planHours" min="0" step="0.5" placeholder="e.g. 2">
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-danger hidden" id="planDeleteBtn" onclick="deletePlan()"><i class="fas fa-trash"></i></button>
-      <button class="btn btn-secondary flex-1" onclick="closeModal('planModal')">Cancel</button>
-      <button class="btn btn-primary flex-1" onclick="savePlan()"><i class="fas fa-check"></i> Save</button>
-    </div>
-  </div>
-</div>
 
-<script src="app.js"></script>
+            <!-- Backup reminder banner -->
+            <div id="backupReminder" class="hidden card p-4 mb-4" style="background:#fffbeb;border:1px solid #fde68a;">
+                <div class="flex items-center justify-between gap-3 flex-wrap">
+                    <span class="text-sm" style="color:#92400e;">⚠️ Matagal na mula noong huli mong pag-backup. I-save ang data mo para hindi mawala.</span>
+                    <div class="flex gap-2">
+                        <button onclick="exportData()" class="btn-primary text-sm">💾 I-backup ngayon</button>
+                        <button onclick="document.getElementById('backupReminder').classList.add('hidden')" class="btn-secondary text-sm">Isara</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Controls -->
+            <div class="card p-6 mb-8">
+                <div class="flex flex-wrap gap-6 items-center justify-between">
+                    <div class="flex gap-4 items-center">
+                        <label class="flex items-center gap-3">
+                            <span class="font-semibold text-gray-700">Select Month:</span>
+                            <input type="month" id="monthSelect" class="border-2 border-gray-300 rounded-lg px-4 py-2 focus:border-gray-700 focus:outline-none">
+                        </label>
+                    </div>
+                    <div class="flex gap-3 flex-wrap">
+                        <button onclick="switchView('grid')" id="gridBtn" class="btn-primary">
+                            📋 Assignments
+                        </button>
+                        <button onclick="switchView('pdfEditor')" id="pdfEditorBtn" class="btn-secondary">
+                            📄 PDF Editor
+                        </button>
+                        <button onclick="switchView('sunday')" id="sundayBtn" class="btn-secondary">
+                            ☀️ Sunday
+                        </button>
+                        <span class="border-l-2 border-gray-300 h-8"></span>
+                        <button onclick="exportData()" class="btn-secondary" title="Save data to a JSON file">
+                            💾 Save/Export
+                        </button>
+                        <button onclick="document.getElementById('importFileInput').click()" class="btn-secondary" title="Import data from a JSON file">
+                            📂 Import
+                        </button>
+                        <button onclick="exportToExcel()" class="btn-secondary" title="Export to Excel with colored grids">
+                            📊 Excel
+                        </button>
+                        <input type="file" id="importFileInput" accept=".json" onchange="importDataFromFile(event)" class="hidden">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sunday Assignments View (Simplified) -->
+            <div id="sundayView" class="hidden">
+                <div class="card p-8">
+                    <h2 class="text-2xl font-bold text-gray-900 mb-6">☀️ Sunday Meeting Assignments</h2>
+                    <p class="text-gray-600 mb-4">Mark brothers who have Sunday meeting assignments. This will show a sun icon in the Assignments tab.</p>
+                    <div id="sundayContent"></div>
+                </div>
+            </div>
+
+            <!-- PDF Editor View -->
+            <div id="pdfEditorView" class="hidden">
+                <div class="card p-6">
+                    <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+                        <h2 class="text-2xl font-bold text-gray-900">📄 PDF Editor - Meeting Schedule</h2>
+                        <button onclick="exportMeetingPDF()" class="btn-primary">📄 Export to PDF</button>
+                    </div>
+                    
+                    <!-- Congregation Header Preview -->
+                    <div class="text-center mb-4 p-4 bg-gray-50 rounded-lg">
+                        <h3 class="text-lg font-bold">UP VILLAGE CONGREGATION</h3>
+                        <p class="text-sm text-gray-600">OF JEHOVAH'S WITNESSES</p>
+                        <p class="text-xs text-gray-500">20 Mahusay Street, UP Village, Diliman, Quezon City</p>
+                        <p class="text-sm font-semibold mt-2" id="pdfEditorMonthTitle">ATING BUHAY AT MINISTERYONG KRISTIYANO (<span id="pdfMonthYearLabel"></span>)</p>
+                    </div>
+
+                    <!-- 2x2 Grid of Weeks -->
+                    <div class="meeting-grid-2x2" id="meetingWeeksContainer">
+                        <!-- Weeks will be rendered here by JavaScript -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Assignments Grid View -->
+            <div id="gridView" class="hidden">
+                <div class="card p-8">
+                    <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+                        <h2 class="text-2xl font-bold text-gray-900">📋 Assignments Grid</h2>
+                        <div class="flex gap-3 items-center flex-wrap">
+                            <label class="font-medium text-gray-700 text-sm">Assignment:</label>
+                            <select id="gridAssignmentType" onchange="renderGrid()" class="border-2 border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-gray-700 focus:outline-none">
+                            </select>
+                            <input type="text" id="gridSearchInput" oninput="updateGridSearch()" placeholder="🔍 Hanapin ang pangalan..." class="border-2 border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-gray-700 focus:outline-none">
+                            <button onclick="showAssignmentSelectionModal()" class="btn-secondary text-sm">
+                                🎯 Manage Selection
+                            </button>
+                            <button onclick="startAutoAssign()" class="btn-primary text-sm" title="Auto-fill empty slots fairly across visible months">
+                                ✨ Auto-Assign
+                            </button>
+                            <button onclick="clearAssignmentsForSelectedMonth()" class="btn-secondary text-sm" title="Clear all assignments for the selected month">
+                                🧹 Clear Month
+                            </button>
+                            <button onclick="undoLastAssignmentChange()" class="btn-secondary text-sm" title="Undo the last assignment change">
+                                ↩ Undo Last
+                            </button>
+                            <button onclick="clearAllAssignments()" class="btn-danger text-sm">
+                                🗑️ Clear All
+                            </button>
+                        </div>
+                    </div>
+                    <!-- Month scroll navigation -->
+                    <div class="month-scroll-bar mb-4">
+                        <button onclick="shiftMonthRange(-1)" class="month-scroll-arrow" title="Previous month">◀</button>
+                        <div class="month-scroll-pills" id="monthScrollPills"></div>
+                        <button onclick="shiftMonthRange(1)" class="month-scroll-arrow" title="Next month">▶</button>
+                    </div>
+                    <div class="grid-legend">
+                        <div class="grid-legend-item">
+                            <div class="grid-legend-box type-0"></div>
+                            <span>Opening Prayer</span>
+                        </div>
+                        <div class="grid-legend-item">
+                            <div class="grid-legend-box type-1"></div>
+                            <span>OCLM Chairman</span>
+                        </div>
+                        <div class="grid-legend-item">
+                            <div class="grid-legend-box type-2"></div>
+                            <span>10 mins talk</span>
+                        </div>
+                        <div class="grid-legend-item">
+                            <div class="grid-legend-box type-3"></div>
+                            <span>Espiritual na Hiyas</span>
+                        </div>
+                        <div class="grid-legend-item">
+                            <div class="grid-legend-box type-4"></div>
+                            <span>Auxiliary Class</span>
+                        </div>
+                        <div class="grid-legend-item">
+                            <div class="grid-legend-box type-5"></div>
+                            <span>Pamumuhay</span>
+                        </div>
+                        <div class="grid-legend-item">
+                            <div class="grid-legend-box type-6"></div>
+                            <span>CBS</span>
+                        </div>
+                        <div class="grid-legend-item">
+                            <div class="grid-legend-box type-7"></div>
+                            <span>CBS Reader</span>
+                        </div>
+                        <div class="grid-legend-item">
+                            <div class="grid-legend-box type-8"></div>
+                            <span>Closing prayer</span>
+                        </div>
+                        <div class="grid-legend-item">
+                            <div class="grid-legend-box empty"></div>
+                            <span>Available</span>
+                        </div>
+                        <div class="grid-legend-item">
+                            <div class="grid-legend-box trail"></div>
+                            <span>Trail (Jan 1 → last assignment)</span>
+                        </div>
+                        <div class="grid-legend-item">
+                            <div class="grid-legend-box sunday">☀️</div>
+                            <span>Has Sunday Assignment</span>
+                        </div>
+                    </div>
+                    <p class="text-sm text-gray-600 mb-4">Click on a cell to assign/unassign. <strong>Trail shows from Jan 1 to last assignment</strong> - shorter trail = needs assignment for selected type. No trail = never assigned this type.</p>
+                    <div class="grid-container" id="gridContainer"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Assignment Selection Modal -->
+    <div id="assignmentSelectionModal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 z-50">
+        <div class="card shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden">
+            <div class="sticky top-0 bg-white border-b-2 border-gray-200 p-6">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <h3 class="text-xl font-semibold text-gray-900 mb-1">🎯 Manage Assignment Selection</h3>
+                        <p class="text-gray-600 text-sm">Toggle who can be chosen for assignment slots and Sunday picks.</p>
+                    </div>
+                    <button onclick="closeAssignmentSelectionModal()" class="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
+                </div>
+                <div class="mt-4 flex flex-wrap gap-2">
+                    <input id="assignmentSelectionName" placeholder="Add a brother name" class="flex-1 min-w-[220px] border-2 border-gray-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-gray-400" />
+                    <select id="assignmentSelectionCategory" class="border-2 border-gray-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-gray-400">
+                        <option value="Elder">Elder</option>
+                            <option value="MS">MS</option>
+                            <option value="Brother">Brother</option>
+                    </select>
+                    <button onclick="addNameToAssignmentSelection()" class="btn-primary">Add</button>
+                </div>
+            </div>
+            <div class="modal-scroll p-6" id="assignmentSelectionContent"></div>
+            <div class="border-t-2 border-gray-200 p-4">
+                <button onclick="closeAssignmentSelectionModal()" class="btn-secondary w-full">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auto-Assign Preview Modal -->
+    <div id="autoAssignModal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 z-50">
+        <div class="card shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden">
+            <div class="sticky top-0 bg-white border-b-2 border-gray-200 p-6">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <h3 class="text-xl font-semibold text-gray-900 mb-1">✨ Auto-Assign Preview</h3>
+                        <p class="text-gray-600 text-sm" id="autoAssignSummary">Review the proposed assignments before applying.</p>
+                    </div>
+                    <button onclick="closeAutoAssignModal()" class="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
+                </div>
+            </div>
+            <div class="modal-scroll p-6" id="autoAssignContent"></div>
+            <div class="border-t-2 border-gray-200 p-4 flex gap-2">
+                <button onclick="applyAutoAssign()" class="btn-primary flex-1" id="autoAssignApplyBtn">✅ Apply All</button>
+                <button onclick="closeAutoAssignModal()" class="btn-secondary flex-1">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import Modal -->
+
+    <!-- Assignment Modal -->
+    <div id="assignModal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 z-50">
+        <div class="card shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden">
+            <div class="sticky top-0 bg-white border-b-2 border-gray-200 p-6">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <h3 class="text-xl font-semibold text-gray-900 mb-1" id="assignModalTitle"></h3>
+                        <p class="text-gray-600 text-sm" id="assignModalDate"></p>
+                    </div>
+                    <button onclick="closeAssignModal()" class="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
+                </div>
+                <!-- search field inside the modal header for quick filtering -->
+                <div class="mt-3">
+                    <input id="assignSearch" oninput="renderAssignModalSuggestions(this.value)" placeholder="Filter brothers by name..." class="w-full border-2 border-gray-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-gray-400" />
+                </div>
+            </div>
+
+            <!-- scrollable area for suggestions -->
+            <div class="modal-scroll p-6" id="assignModalContent"></div>
+
+            <div class="border-t-2 border-gray-200 p-4">
+                <div class="flex gap-3">
+                    <button onclick="closeAssignModal()" class="btn-secondary w-full">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- PDF Export Modal -->
+
+    <!-- Brother Details Modal -->
+
+    <script src="app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW registration failed:', err));
+            });
+        }
+    </script>
 </body>
 </html>

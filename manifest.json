@@ -1,24 +1,31 @@
 {
-  "name": "Ministry Helper",
-  "short_name": "Ministry",
-  "description": "Personal field service tracker with map visualization",
+  "name": "Meeting Assignment Tracker",
+  "short_name": "Assignments",
+  "description": "Manage Thursday midweek meeting assignments fairly & easily",
   "start_url": "./index.html",
+  "scope": "./",
   "display": "standalone",
-  "background_color": "#F8F9FD",
-  "theme_color": "#6C5CE7",
-  "orientation": "portrait",
+  "orientation": "any",
+  "background_color": "#f3f4f6",
+  "theme_color": "#374151",
   "icons": [
     {
       "src": "icons/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
       "src": "icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

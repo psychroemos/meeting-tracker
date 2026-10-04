@@ -44,6 +44,7 @@
         let selectedType = null;
         let autoAssignPreview = null;
         let autoAssignUnfilled = 0;
+        let workbookPreview = null;
         let meetingEditorData = {}; // Stores editable fields for PDF editor
         let gridStartMonth = 1; // 1-12, the first month shown in the grid
         const GRID_MONTH_COUNT = 6; // number of months visible at once
@@ -363,10 +364,14 @@
                     if (warning.toLowerCase().includes('strict warning')) score -= 35;
                 });
 
-                // discourage repeating same assignment type
+                // per-type fairness: penalize by how many times this brother ALREADY has this type
+                const sameTypeCount = assignments.filter(a => a.brotherId === brother.id && a.type === type).length;
+                score -= sameTypeCount * 30;
+
+                // still slightly discourage repeating the immediately-previous assignment type
                 const allBrotherAssignments = assignments.filter(a => a.brotherId === brother.id).sort((a, b) => new Date(b.date) - new Date(a.date));
                 if (allBrotherAssignments.length > 0 && allBrotherAssignments[0].type === type) {
-                    score -= 25;
+                    score -= 10;
                 }
 
                 // bonus if never had this type
@@ -1166,7 +1171,83 @@
 
 
         // Export data to JSON file
-        function exportData() {
+        // ==================== BACKUP FOLDER SAVE (File System Access API) ====================
+        // Persists a chosen directory handle in IndexedDB so exports go straight to the
+        // user's backups folder after a one-time pick. Falls back to a normal download
+        // when the API is unavailable (file://, Firefox, Safari) or the user cancels.
+        function idbOpen() {
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open('atk_fs', 1);
+                req.onupgradeneeded = () => { req.result.createObjectStore('handles'); };
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+        async function idbGetHandle() {
+            try {
+                const db = await idbOpen();
+                return await new Promise((resolve) => {
+                    const tx = db.transaction('handles', 'readonly');
+                    const r = tx.objectStore('handles').get('backupDir');
+                    r.onsuccess = () => resolve(r.result || null);
+                    r.onerror = () => resolve(null);
+                });
+            } catch (e) { return null; }
+        }
+        async function idbSetHandle(handle) {
+            try {
+                const db = await idbOpen();
+                const tx = db.transaction('handles', 'readwrite');
+                tx.objectStore('handles').put(handle, 'backupDir');
+            } catch (e) { /* ignore */ }
+        }
+
+        function downloadBlobFallback(filename, blob) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        async function saveToBackups(filename, blob) {
+            // Fallback path when the API is not available (e.g. file://, unsupported browser)
+            if (!window.showDirectoryPicker) {
+                downloadBlobFallback(filename, blob);
+                return 'download';
+            }
+            try {
+                let dir = await idbGetHandle();
+                // Verify/request permission on the stored handle
+                if (dir) {
+                    const perm = await dir.queryPermission({ mode: 'readwrite' });
+                    if (perm !== 'granted') {
+                        const req = await dir.requestPermission({ mode: 'readwrite' });
+                        if (req !== 'granted') dir = null;
+                    }
+                }
+                // First time (or permission lost): ask the user to pick the backups folder once
+                if (!dir) {
+                    dir = await window.showDirectoryPicker({ id: 'atkBackups', mode: 'readwrite' });
+                    await idbSetHandle(dir);
+                }
+                const fileHandle = await dir.getFileHandle(filename, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+                return 'folder';
+            } catch (e) {
+                // User cancelled the picker, or a write error — fall back to normal download
+                if (e && e.name === 'AbortError') { downloadBlobFallback(filename, blob); return 'download'; }
+                downloadBlobFallback(filename, blob);
+                return 'download';
+            }
+        }
+
+        async function exportData() {
             const data = {
                 exportDate: new Date().toISOString(),
                 version: '1.0',
@@ -1175,31 +1256,17 @@
                 sundayAssignments: sundayAssignments,
                 brotherEligibility: brotherEligibility
             };
-            
             const jsonStr = JSON.stringify(data, null, 2);
             const blob = new Blob([jsonStr], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            
-            const a = document.createElement('a');
-            a.href = url;
             const dateStr = new Date().toISOString().slice(0, 10);
-            a.download = `assignment-tracker-backup-${dateStr}.json`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            
+            const where = await saveToBackups(`assignment-tracker-backup-${dateStr}.json`, blob);
             localStorage.setItem('atk_lastBackup', new Date().toISOString());
-
-            
             const _br = document.getElementById('backupReminder'); if (_br) _br.classList.add('hidden');
-
-            
-            alert('Data exported successfully! The file has been downloaded.');
+            alert(where === 'folder' ? 'Data saved to your backups folder!' : 'Data exported successfully! The file has been downloaded.');
         }
 
         // Export to Excel with colored grids and separate sheets per category
-        function exportToExcel() {
+        async function exportToExcel() {
             if (typeof XLSX === 'undefined') {
                 alert('Excel library not loaded. Please check your internet connection and refresh the page.');
                 return;
@@ -1401,9 +1468,11 @@
 
             // Export
             const dateStr = new Date().toISOString().slice(0, 10);
-            XLSX.writeFile(wb, `assignment-tracker-${dateStr}.xlsx`);
+            const wbArray = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+            const xlsxBlob = new Blob([wbArray], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+            const whereXlsx = await saveToBackups(`assignment-tracker-${dateStr}.xlsx`, xlsxBlob);
             
-            alert('Excel file exported successfully!');
+            alert(whereXlsx === 'folder' ? 'Excel saved to your backups folder!' : 'Excel file exported successfully!');
         }
 
         // Import data from JSON file
@@ -1837,7 +1906,155 @@
             container.innerHTML = html;
             container.querySelectorAll('textarea.pdf-editor-input').forEach(autoResizeTextarea);
         }
-        function exportMeetingPDF() {
+        // ==================== WORKBOOK IMPORT (EPUB) ====================
+        const WB_MONTHS_TG = { 'ENERO':1,'PEBRERO':2,'MARSO':3,'ABRIL':4,'MAYO':5,'HUNYO':6,'HULYO':7,
+            'AGOSTO':8,'SETYEMBRE':9,'SEPTYEMBRE':9,'OKTUBRE':10,'NOBYEMBRE':11,'DISYEMBRE':12 };
+
+        function wbStripTags(s) { return (s || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim(); }
+
+        function wbCleanTitle(t) {
+            return (t || '').replace(/^\d+\.\s*/, '').replace(/\s*\(\d+\s*min\.?\)\s*/i, '').trim();
+        }
+
+        function wbTitleWithMin(rawTitle, minutes) {
+            const base = wbCleanTitle(rawTitle);
+            return minutes ? `${base} (${minutes} min.)` : base;
+        }
+
+        function wbWeekToThursday(label) {
+            const up = (label || '').toUpperCase();
+            const m = up.match(/([A-ZÑ]+)\s+(\d+)/);
+            if (!m) return null;
+            const month = WB_MONTHS_TG[m[1]];
+            const day = parseInt(m[2], 10);
+            let year = 2026;
+            const ym = up.match(/(\d{4})/);
+            if (ym) year = parseInt(ym[1], 10);
+            if (!month) return null;
+            const monday = new Date(`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}T12:00:00+08:00`);
+            const thu = new Date(monday.getTime() + 3 * 86400000);
+            return `${thu.getFullYear()}-${String(thu.getMonth()+1).padStart(2,'0')}-${String(thu.getDate()).padStart(2,'0')}`;
+        }
+
+        function wbParseWeek(html) {
+            const h1 = html.match(/<h1[^>]*>(.*?)<\/h1>/s);
+            const weekLabel = h1 ? wbStripTags(h1[1]) : '';
+            const h2 = html.match(/<h2[^>]*>.*?<strong><a[^>]*>(.*?)<\/a><\/strong>/s);
+            const bible = h2 ? wbStripTags(h2[1]) : '';
+            const songs = [...html.matchAll(/Awit Blg\.\s*(\d+)/g)].map(m => m[1]);
+            const wheatI = html.indexOf('dc-icon--wheat');
+            const sheepI = html.indexOf('dc-icon--sheep');
+            const parts = [];
+            for (const mm of html.matchAll(/<h3[^>]*data-pid="(\d+)"[^>]*>(.*?)<\/h3>/gs)) {
+                const pos = mm.index;
+                const title = wbStripTags(mm[2]);
+                const after = html.slice(mm.index + mm[0].length, mm.index + mm[0].length + 300);
+                const mIn = title.match(/\((\d+)\s*min\.?\)/);
+                const mAf = after.match(/\((\d+)\s*min\.?\)/);
+                const minutes = mIn ? mIn[1] : (mAf ? mAf[1] : '');
+                const sec = pos < wheatI ? 'kayaman' : (pos < sheepI ? 'ministry' : 'living');
+                parts.push({ title, minutes, sec });
+            }
+            return { weekLabel, bible, songs, parts };
+        }
+
+        async function handleWorkbookImport(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            event.target.value = '';
+            if (typeof JSZip === 'undefined') { alert('ZIP library not loaded. Refresh the page and try again.'); return; }
+            try {
+                const zip = await JSZip.loadAsync(file);
+                const weekly = Object.keys(zip.files)
+                    .filter(n => /OEBPS\/\d{9}\.xhtml$/.test(n) && !n.includes('extracted') && !n.endsWith('400.xhtml'))
+                    .sort();
+                const weeks = [];
+                for (const name of weekly) {
+                    const content = await zip.files[name].async('string');
+                    const d = wbParseWeek(content);
+                    const thu = wbWeekToThursday(d.weekLabel);
+                    if (!thu) continue;
+                    const kayaman = d.parts.filter(p => p.sec === 'kayaman');
+                    const part1 = kayaman.find(p => /^1\./.test(p.title));
+                    const ministry = d.parts.filter(p => p.sec === 'ministry');
+                    const living = d.parts.filter(p => p.sec === 'living' && /^\d+\./.test(p.title) && !/Pag-aaral ng Kongregasyon/i.test(p.title));
+                    weeks.push({
+                        thursday: thu,
+                        weekLabel: d.weekLabel,
+                        bibleReading: d.bible,
+                        openingSong: d.songs[0] || '',
+                        middleSong: d.songs[1] || '',
+                        closingSong: d.songs[2] || '',
+                        part1Title: part1 ? wbTitleWithMin(part1.title, part1.minutes) : '',
+                        ministryParts: ministry.map(p => ({ title: wbTitleWithMin(p.title, p.minutes), name: '', assistant: '' })),
+                        pamumuhayTitles: living.map(p => wbTitleWithMin(p.title, p.minutes))
+                    });
+                }
+                if (weeks.length === 0) { alert('Walang nakitang lingguhang schedule sa EPUB na ito.'); return; }
+                workbookPreview = weeks;
+                renderWorkbookPreview();
+                document.getElementById('workbookModal').classList.remove('hidden');
+                document.body.classList.add('modal-open');
+            } catch (e) {
+                alert('Error reading workbook: ' + e.message);
+            }
+        }
+
+        function renderWorkbookPreview() {
+            const container = document.getElementById('workbookContent');
+            const summary = document.getElementById('workbookSummary');
+            const weeks = workbookPreview || [];
+            if (summary) summary.textContent = `${weeks.length} week(s) found — ${weeks[0].thursday} to ${weeks[weeks.length-1].thursday}. Only empty fields will be filled (manual entries preserved).`;
+            let html = '';
+            weeks.forEach(w => {
+                html += `<div class="mb-3 border border-gray-200 rounded-lg p-3">
+                    <div class="font-bold text-gray-900">${w.weekLabel} <span class="text-xs text-gray-500">(${w.thursday})</span></div>
+                    <div class="text-xs text-gray-600 mb-1">${w.bibleReading} &bull; Awit ${w.openingSong}/${w.middleSong}/${w.closingSong}</div>
+                    <div class="text-sm text-gray-800">1. ${w.part1Title}</div>
+                    ${w.ministryParts.map(p => `<div class="text-sm text-gray-700" style="padding-left:10px;">- ${p.title}</div>`).join('')}
+                    ${w.pamumuhayTitles.map(t => `<div class="text-sm text-gray-700" style="padding-left:10px;">- ${t}</div>`).join('')}
+                </div>`;
+            });
+            container.innerHTML = html;
+        }
+
+        function applyWorkbookImport() {
+            const weeks = workbookPreview || [];
+            if (weeks.length === 0) { closeWorkbookModal(); return; }
+            loadMeetingEditorData();
+            weeks.forEach(w => {
+                const key = getMeetingEditorKey(w.thursday);
+                if (!meetingEditorData[key]) meetingEditorData[key] = {};
+                const md = meetingEditorData[key];
+                const setIfEmpty = (field, val) => {
+                    if (val && (md[field] === undefined || md[field] === '' || md[field] === null)) md[field] = val;
+                };
+                setIfEmpty('bibleReading', w.bibleReading);
+                setIfEmpty('openingSong', w.openingSong);
+                setIfEmpty('middleSong', w.middleSong);
+                setIfEmpty('closingSong', w.closingSong);
+                setIfEmpty('part1Title', w.part1Title);
+                if ((!md.ministryParts || md.ministryParts.length === 0) && w.ministryParts.length > 0) {
+                    md.ministryParts = w.ministryParts.map(p => ({ title: p.title, name: '', assistant: '' }));
+                }
+                w.pamumuhayTitles.forEach((t, i) => {
+                    const f = 'pamumuhayTitle' + i;
+                    if (t && (md[f] === undefined || md[f] === '' || md[f] === 'Pamumuhay')) md[f] = t;
+                });
+            });
+            saveMeetingEditorData();
+            workbookPreview = null;
+            closeWorkbookModal();
+            if (currentView === 'pdfEditor') renderPdfEditor();
+            alert(`Workbook imported! Pinunan ang mga field para sa ${weeks.length} linggo. Ang mga pangalan ay mula pa rin sa Assignments tab.`);
+        }
+
+        function closeWorkbookModal() {
+            document.getElementById('workbookModal').classList.add('hidden');
+            document.body.classList.remove('modal-open');
+        }
+
+        async function exportMeetingPDF() {
             const { jsPDF } = window.jspdf;
             if (!jsPDF) { alert('PDF library not loaded. Please refresh the page.'); return; }
 
@@ -1890,7 +2107,9 @@
                 drawMeetingWeek(doc, thursday, x, y, contentWidth, weekAreaH);
             });
 
-            doc.save(`OCLM-${monthNames[month]}-${year}.pdf`);
+            const pdfBlob = doc.output('blob');
+            const wherePdf = await saveToBackups(`OCLM-${monthNames[month]}-${year}.pdf`, pdfBlob);
+            if (wherePdf === 'folder') alert('PDF saved to your backups folder!');
         }
 
         function drawMeetingWeek(doc, thursday, x, y, width, height) {

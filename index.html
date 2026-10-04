@@ -13,6 +13,7 @@
     <meta name="apple-mobile-web-app-title" content="Assignment Tracker">
     <script src="lib/xlsx.bundle.min.js"></script>
     <script src="lib/jspdf.umd.min.js"></script>
+    <script src="lib/jszip.min.js"></script>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -83,7 +84,11 @@
                 <div class="card p-6">
                     <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
                         <h2 class="text-2xl font-bold text-gray-900">📄 PDF Editor - Meeting Schedule</h2>
-                        <button onclick="exportMeetingPDF()" class="btn-primary">📄 Export to PDF</button>
+                        <div class="flex gap-2 flex-wrap">
+                            <button onclick="document.getElementById('workbookFileInput').click()" class="btn-secondary" title="Import part titles, minutes & songs from a JW Meeting Workbook EPUB">📥 Import Workbook</button>
+                            <input type="file" id="workbookFileInput" accept=".epub" onchange="handleWorkbookImport(event)" class="hidden">
+                            <button onclick="exportMeetingPDF()" class="btn-primary">📄 Export to PDF</button>
+                        </div>
                     </div>
                     
                     <!-- Congregation Header Preview -->
@@ -235,6 +240,26 @@
             <div class="border-t-2 border-gray-200 p-4 flex gap-2">
                 <button onclick="applyAutoAssign()" class="btn-primary flex-1" id="autoAssignApplyBtn">✅ Apply All</button>
                 <button onclick="closeAutoAssignModal()" class="btn-secondary flex-1">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import Workbook Preview Modal -->
+    <div id="workbookModal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 z-50">
+        <div class="card shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden">
+            <div class="sticky top-0 bg-white border-b-2 border-gray-200 p-6">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <h3 class="text-xl font-semibold text-gray-900 mb-1">📥 Import Workbook Preview</h3>
+                        <p class="text-gray-600 text-sm" id="workbookSummary">Review the weeks found before importing.</p>
+                    </div>
+                    <button onclick="closeWorkbookModal()" class="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
+                </div>
+            </div>
+            <div class="modal-scroll p-6" id="workbookContent"></div>
+            <div class="border-t-2 border-gray-200 p-4 flex gap-2">
+                <button onclick="applyWorkbookImport()" class="btn-primary flex-1" id="workbookApplyBtn">✅ Import</button>
+                <button onclick="closeWorkbookModal()" class="btn-secondary flex-1">Cancel</button>
             </div>
         </div>
     </div>

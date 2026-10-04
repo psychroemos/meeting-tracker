@@ -1,5 +1,5 @@
 /* Service Worker for Meeting Assignment Tracker (ATK) */
-const CACHE_NAME = 'atk-cache-v1';
+const CACHE_NAME = 'atk-cache-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -9,6 +9,7 @@ const ASSETS = [
   './lib/tailwind-utilities.css',
   './lib/xlsx.bundle.min.js',
   './lib/jspdf.umd.min.js',
+  './lib/jszip.min.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-512-maskable.png'

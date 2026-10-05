@@ -1,7 +1,7 @@
 {
-  "name": "Meeting Assignment Tracker",
-  "short_name": "Assignments",
-  "description": "Manage Thursday midweek meeting assignments fairly & easily",
+  "name": "Assignment Tracker – Bagong Kongregasyon",
+  "short_name": "NC Assignments",
+  "description": "Midweek meeting (OCLM) assignments para sa bagong kongregasyon",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

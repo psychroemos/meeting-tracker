@@ -46,11 +46,10 @@
         .grid-table th.week-type-1 { background: #f97316 !important; } /* OCLM Chairman - Orange */
         .grid-table th.week-type-2 { background: #eab308 !important; color: #1f2937 !important; } /* 10 mins talk - Yellow */
         .grid-table th.week-type-3 { background: #22c55e !important; } /* Espiritual na Hiyas - Green */
-        .grid-table th.week-type-4 { background: #14b8a6 !important; } /* Auxiliary Class Chairman - Teal */
-        .grid-table th.week-type-5 { background: #3b82f6 !important; } /* Pamumuhay - Blue */
-        .grid-table th.week-type-6 { background: #6366f1 !important; } /* CBS - Indigo */
-        .grid-table th.week-type-7 { background: #8b5cf6 !important; } /* CBS Reader - Purple */
-        .grid-table th.week-type-8 { background: #ec4899 !important; } /* Closing prayer - Pink */
+        .grid-table th.week-type-4 { background: #3b82f6 !important; } /* Pamumuhay - Blue */
+        .grid-table th.week-type-5 { background: #6366f1 !important; } /* CBS - Indigo */
+        .grid-table th.week-type-6 { background: #8b5cf6 !important; } /* CBS Reader - Purple */
+        .grid-table th.week-type-7 { background: #ec4899 !important; } /* Closing prayer - Pink */
         .grid-table .name-cell { text-align: left; font-weight: 600; background: #f9fafb; position: sticky; left: 0; z-index: 5; min-width: 150px; }
         .grid-table .name-cell.row-even { background: #f3f4f6; }
         .grid-table .name-cell.row-highlight { background: #fef3c7; }
@@ -67,16 +66,14 @@
         .grid-table td.week-cell.type-2:hover { background: #fde047 !important; }
         .grid-table td.week-cell.type-3 { background: #bbf7d0 !important; } /* Espiritual na Hiyas - Green */
         .grid-table td.week-cell.type-3:hover { background: #86efac !important; }
-        .grid-table td.week-cell.type-4 { background: #99f6e4 !important; } /* Auxiliary Class Chairman - Teal */
-        .grid-table td.week-cell.type-4:hover { background: #5eead4 !important; }
-        .grid-table td.week-cell.type-5 { background: #bfdbfe !important; } /* Pamumuhay - Blue */
-        .grid-table td.week-cell.type-5:hover { background: #93c5fd !important; }
-        .grid-table td.week-cell.type-6 { background: #c7d2fe !important; } /* CBS - Indigo */
-        .grid-table td.week-cell.type-6:hover { background: #a5b4fc !important; }
-        .grid-table td.week-cell.type-7 { background: #ddd6fe !important; } /* CBS Reader - Purple */
-        .grid-table td.week-cell.type-7:hover { background: #c4b5fd !important; }
-        .grid-table td.week-cell.type-8 { background: #fbcfe8 !important; } /* Closing prayer - Pink */
-        .grid-table td.week-cell.type-8:hover { background: #f9a8d4 !important; }
+        .grid-table td.week-cell.type-4 { background: #bfdbfe !important; } /* Pamumuhay - Blue */
+        .grid-table td.week-cell.type-4:hover { background: #93c5fd !important; }
+        .grid-table td.week-cell.type-5 { background: #c7d2fe !important; } /* CBS - Indigo */
+        .grid-table td.week-cell.type-5:hover { background: #a5b4fc !important; }
+        .grid-table td.week-cell.type-6 { background: #ddd6fe !important; } /* CBS Reader - Purple */
+        .grid-table td.week-cell.type-6:hover { background: #c4b5fd !important; }
+        .grid-table td.week-cell.type-7 { background: #fbcfe8 !important; } /* Closing prayer - Pink */
+        .grid-table td.week-cell.type-7:hover { background: #f9a8d4 !important; }
         /* Subtle indicators for other assignments */
         .grid-table td.week-cell.has-other { background: #fef3c7; } /* subtle yellow - has other assignment */
         .grid-table td.week-cell.has-other:hover { background: #fde68a; }
@@ -104,11 +101,10 @@
         .grid-legend-box.type-1 { background: #fed7aa; border: 1px solid #fb923c; }
         .grid-legend-box.type-2 { background: #fef08a; border: 1px solid #facc15; }
         .grid-legend-box.type-3 { background: #bbf7d0; border: 1px solid #4ade80; }
-        .grid-legend-box.type-4 { background: #99f6e4; border: 1px solid #2dd4bf; }
-        .grid-legend-box.type-5 { background: #bfdbfe; border: 1px solid #60a5fa; }
-        .grid-legend-box.type-6 { background: #c7d2fe; border: 1px solid #818cf8; }
-        .grid-legend-box.type-7 { background: #ddd6fe; border: 1px solid #a78bfa; }
-        .grid-legend-box.type-8 { background: #fbcfe8; border: 1px solid #f472b6; }
+        .grid-legend-box.type-4 { background: #bfdbfe; border: 1px solid #60a5fa; }
+        .grid-legend-box.type-5 { background: #c7d2fe; border: 1px solid #818cf8; }
+        .grid-legend-box.type-6 { background: #ddd6fe; border: 1px solid #a78bfa; }
+        .grid-legend-box.type-7 { background: #fbcfe8; border: 1px solid #f472b6; }
         .grid-legend-box.empty { background: white; border: 1px solid #d1d5db; }
         .grid-legend-box.has-other { background: #fef3c7; border: 1px solid #fcd34d; }
         .grid-legend-box.has-same-type { background: #dbeafe; border: 1px solid #93c5fd; }
@@ -122,16 +118,14 @@
         .grid-table td.week-cell.trail-type-2:hover { background: #fef9c3; }
         .grid-table td.week-cell.trail-type-3 { background: #f0fdf4; } /* Espiritual na Hiyas trail - Light Green */
         .grid-table td.week-cell.trail-type-3:hover { background: #dcfce7; }
-        .grid-table td.week-cell.trail-type-4 { background: #f0fdfa; } /* Auxiliary Class trail - Light Teal */
-        .grid-table td.week-cell.trail-type-4:hover { background: #ccfbf1; }
-        .grid-table td.week-cell.trail-type-5 { background: #eff6ff; } /* Pamumuhay trail - Light Blue */
-        .grid-table td.week-cell.trail-type-5:hover { background: #dbeafe; }
-        .grid-table td.week-cell.trail-type-6 { background: #eef2ff; } /* CBS trail - Light Indigo */
-        .grid-table td.week-cell.trail-type-6:hover { background: #e0e7ff; }
-        .grid-table td.week-cell.trail-type-7 { background: #f5f3ff; } /* CBS Reader trail - Light Purple */
-        .grid-table td.week-cell.trail-type-7:hover { background: #ede9fe; }
-        .grid-table td.week-cell.trail-type-8 { background: #fdf2f8; } /* Closing prayer trail - Light Pink */
-        .grid-table td.week-cell.trail-type-8:hover { background: #fce7f3; }
+        .grid-table td.week-cell.trail-type-4 { background: #eff6ff; } /* Pamumuhay trail - Light Blue */
+        .grid-table td.week-cell.trail-type-4:hover { background: #dbeafe; }
+        .grid-table td.week-cell.trail-type-5 { background: #eef2ff; } /* CBS trail - Light Indigo */
+        .grid-table td.week-cell.trail-type-5:hover { background: #e0e7ff; }
+        .grid-table td.week-cell.trail-type-6 { background: #f5f3ff; } /* CBS Reader trail - Light Purple */
+        .grid-table td.week-cell.trail-type-6:hover { background: #ede9fe; }
+        .grid-table td.week-cell.trail-type-7 { background: #fdf2f8; } /* Closing prayer trail - Light Pink */
+        .grid-table td.week-cell.trail-type-7:hover { background: #fce7f3; }
         .grid-legend-box.trail { background: #f3f4f6; border: 1px dashed #9ca3af; }
         .grid-legend-box.sunday { background: #fef9c3; border: 1px solid #facc15; }
         .sunday-indicator { position: relative; }
@@ -158,7 +152,6 @@
         .meeting-part-name { text-align: right; font-weight: 600; min-width: 120px; }
         .meeting-part-minutes { color: #666; font-size: 9px; }
         .meeting-song-inline { background: #b91c1c; color: white; padding: 2px 8px; font-size: 10px; display: flex; justify-content: space-between; }
-        .meeting-auxiliary { background: #d1fae5; border-left: 3px solid #059669; }
         .meeting-footer { display: flex; justify-content: space-between; padding: 3px 8px; font-size: 10px; border-top: 1px solid #ccc; }
         .pdf-editor-input { border: 1px solid #ddd; padding: 2px 4px; font-size: 10px; width: 100%; background: #fffef0; font-family: Arial, sans-serif; }
         .pdf-editor-input:focus { outline: none; border-color: #666; background: white; }
@@ -183,7 +176,6 @@
 .mc-treasures { background: #0d9488; }   /* teal */
 .mc-ministry  { background: #a16207; }   /* deep amber (readable) */
 .mc-living    { background: #b91c1c; }   /* red */
-.mc-auxiliary { background: #a16207; }   /* gold/amber, matches ministry */
 .meeting-awit-inline { padding: 2px 8px; font-size: 10px; font-weight: 600; color: #374151; }
 .meeting-part-pair { display: flex; gap: 4px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
 .meeting-part-pair .amp { color: #999; }
@@ -197,3 +189,176 @@
 .meeting-2col .meeting-part-name { flex: 0 0 100%; text-align: left; min-width: 0; }
 .meeting-2col .meeting-part-pair { justify-content: flex-start; }
 .meeting-2col .meeting-part-number { display: inline-block; }
+
+
+/* ===== Students tab (Hakbang 2) ===== */
+.stu-toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:14px; }
+.stu-check { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:#374151; }
+.stu-empty { padding:14px; background:#f9fafb; border:1px dashed #d1d5db; border-radius:8px; color:#4b5563; font-size:14px; margin:8px 0; }
+.stu-warn { padding:10px 14px; background:#fffbeb; border:1px solid #fde68a; color:#92400e; border-radius:8px; font-size:13px; margin-bottom:12px; }
+.stu-warn a { color:#92400e; text-decoration:underline; margin-left:6px; }
+.stu-week { border:1px solid #e5e7eb; border-radius:10px; margin-bottom:16px; overflow:hidden; }
+.stu-weekbar { display:flex; justify-content:space-between; gap:10px; background:#BE8900; color:#fff; font-weight:600; padding:8px 14px; font-size:14px; }
+.stu-slot { padding:10px 14px; border-top:1px solid #f3f4f6; }
+.stu-slot-disc { background:#f9fafb; }
+.stu-slot-title { font-weight:600; color:#111827; font-size:14px; margin-bottom:4px; }
+.stu-kind { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+.stu-kind select { font-size:12px; border:1px solid #d1d5db; border-radius:6px; padding:2px 6px; background:#fff; }
+.stu-badge { display:inline-block; font-size:11px; background:#eef2ff; color:#3730a3; border-radius:999px; padding:1px 8px; }
+.stu-picks { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.stu-select { min-width:260px; max-width:100%; font-size:13px; border:1px solid #d1d5db; border-radius:6px; padding:4px 6px; background:#fff; }
+.stu-hint { font-size:12px; color:#6b7280; font-style:italic; }
+.stu-roster { border:1px solid #e5e7eb; border-radius:10px; padding:12px; margin-bottom:18px; background:#fff; }
+.stu-roster-tools { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:10px; }
+.stu-roster-tools input[type=text] { border:1px solid #d1d5db; border-radius:6px; padding:4px 8px; font-size:13px; min-width:200px; }
+.stu-table { width:100%; border-collapse:collapse; font-size:13px; }
+.stu-table th { text-align:left; background:#f3f4f6; padding:6px 8px; font-weight:600; color:#374151; position:sticky; top:0; }
+.stu-table td { padding:5px 8px; border-top:1px solid #f3f4f6; }
+.stu-table select { font-size:12px; border:1px solid #d1d5db; border-radius:6px; padding:1px 4px; }
+.stu-table select.stu-missing { border-color:#f59e0b; background:#fffbeb; }
+.stu-inactive td { color:#9ca3af; }
+.stu-muted { color:#9ca3af; }
+.stu-add { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.stu-add input, .stu-add select { border:1px solid #d1d5db; border-radius:6px; padding:4px 8px; font-size:13px; }
+
+
+/* ===== S-140 settings + timing (Hakbang 3) ===== */
+.ms-panel { border:1px solid #e5e7eb; border-radius:10px; background:#fff; }
+.ms-panel > summary { cursor:pointer; padding:10px 14px; font-weight:600; color:#374151; }
+.ms-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:10px 16px; padding:4px 14px 14px; }
+.ms-field { display:flex; flex-direction:column; gap:4px; font-size:12px; color:#4b5563; }
+.ms-field input { border:1px solid #d1d5db; border-radius:6px; padding:4px 8px; font-size:13px; color:#111827; }
+.ms-wide { grid-column:1 / -1; }
+.ms-check { display:flex; align-items:center; gap:8px; font-size:13px; color:#374151; }
+.week-type-row { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:6px 10px; font-size:12px; color:#374151; background:#f9fafb; border-bottom:1px solid #e5e7eb; }
+.week-type-row select { font-size:12px; border:1px solid #d1d5db; border-radius:6px; padding:2px 6px; background:#fff; }
+.week-timing { margin-top:6px; padding:6px 10px; font-size:12px; border-radius:6px; background:#f3f4f6; color:#374151; }
+.week-timing.ok { background:#ecfdf5; color:#065f46; }
+.week-timing.warn { background:#fffbeb; color:#92400e; }
+.week-timing ul { margin:4px 0 0 16px; padding:0; list-style:none; }
+.wt-muted { color:#6b7280; }
+
+
+/* ===== v4: special weeks, student auto-assign, clear buttons ===== */
+.stu-divider { width:2px; height:28px; background:#d1d5db; display:inline-block; }
+.stu-x { border:none; background:none; color:#9ca3af; cursor:pointer; font-size:14px; padding:2px 6px; border-radius:6px; line-height:1; }
+.stu-x:hover { color:#dc2626; background:#fef2f2; }
+.stu-note { padding:6px 14px; font-size:12px; background:#fdf2f8; color:#7E0024; border-top:1px solid #f3f4f6; }
+.sw-body { padding:4px 14px 14px; }
+.sw-add { display:flex; flex-wrap:wrap; gap:10px 14px; align-items:flex-end; margin-bottom:8px; }
+.sw-add select, .sw-add input { border:1px solid #d1d5db; border-radius:6px; padding:4px 8px; font-size:13px; color:#111827; background:#fff; }
+.sw-note { min-width:220px; flex:1; }
+.sw-hint { font-size:12px; color:#6b7280; margin:4px 0 10px; }
+.sw-past td { color:#9ca3af; }
+.sw-actions { white-space:nowrap; text-align:right; }
+.week-type-row.wt-special { background:#fdf2f8; }
+.sap-week { font-weight:700; color:#111827; margin:12px 0 4px; padding-bottom:2px; border-bottom:2px solid #BE8900; font-size:13px; }
+.sap-row { display:grid; grid-template-columns:minmax(160px,1.4fr) 76px minmax(140px,1fr) minmax(120px,1.2fr) 28px; gap:8px; align-items:center; font-size:13px; padding:4px 0; border-bottom:1px solid #f3f4f6; }
+.sap-title { color:#374151; }
+.sap-role { font-size:11px; text-align:center; background:#eef2ff; color:#3730a3; border-radius:999px; padding:1px 6px; }
+.sap-role.sap-asst { background:#f3f4f6; color:#4b5563; }
+.sap-name { font-weight:600; color:#111827; }
+.sap-info { font-size:12px; color:#6b7280; }
+
+
+/* ===== v5: S-38 elder-only cleanup ===== */
+.s38-banner { margin-bottom:12px; padding:10px 14px; border-radius:8px; background:#fffbeb; border:1px solid #fde68a; color:#92400e; font-size:13px; }
+.s38-banner .s38-list { margin:6px 0 8px; font-size:12px; color:#78350f; }
+.grid-table tr.row-elder-only td { opacity:0.45; }
+.elder-only-tag { margin-left:6px; font-size:10px; background:#f3f4f6; color:#6b7280; border-radius:999px; padding:1px 6px; }
+
+
+/* ===== v9: Fairness dashboard ===== */
+.fair-toolbar { display:flex; flex-wrap:wrap; gap:12px 18px; align-items:center; margin-bottom:6px; }
+.fair-tabs { display:flex; gap:8px; }
+.fair-field { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:#374151; }
+.fair-field select { border:1px solid #d1d5db; border-radius:6px; padding:3px 6px; font-size:13px; background:#fff; }
+.fair-hint { font-size:12px; color:#6b7280; margin:2px 0 12px; }
+.fair-cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(170px, 1fr)); gap:10px; margin-bottom:12px; }
+.fair-card { border:1px solid #e5e7eb; border-radius:10px; padding:10px 12px; background:#fff; }
+.fair-card.warn { background:#fffbeb; border-color:#fde68a; }
+.fair-card.ok { background:#ecfdf5; border-color:#a7f3d0; }
+.fair-card-v { font-size:22px; font-weight:700; color:#111827; line-height:1.1; }
+.fair-card-l { font-size:12px; color:#4b5563; margin-top:2px; }
+.fair-filters { display:flex; flex-wrap:wrap; gap:14px; margin:6px 0 8px; }
+.fair-table td { vertical-align:middle; }
+.fair-num { text-align:center; }
+.fair-g { color:#9ca3af; font-size:12px; }
+.fair-bar { display:flex; align-items:center; gap:6px; min-width:110px; }
+.fair-bar-fill { display:inline-block; height:10px; border-radius:999px; background:#BE8900; }
+.fair-bar-fill.heavy { background:#dc2626; }
+.fair-bar b { font-size:12px; color:#111827; }
+.fair-chips { max-width:340px; }
+.fair-chip { display:inline-block; font-size:11px; background:#f3f4f6; color:#374151; border-radius:999px; padding:1px 7px; margin:1px 3px 1px 0; white-space:nowrap; }
+.fair-table tr.fair-never td { background:#fef2f2; }
+.fair-table tr.fair-long td { background:#fffbeb; }
+.fair-table tr.fair-heavy td { background:#fef2f2; }
+
+
+/* ===== v13: auto-assign range + fix preview ===== */
+.auto-range { display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:12px; color:#374151; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:3px 8px; }
+.auto-range-l { font-weight:600; }
+.auto-range label { display:inline-flex; align-items:center; gap:4px; }
+.auto-range input { border:1px solid #d1d5db; border-radius:6px; padding:1px 4px; font-size:12px; background:#fff; }
+.sap-was { display:block; font-size:11px; font-weight:400; color:#9ca3af; text-decoration:line-through; }
+
+
+/* ===== v14: Assignments tab colors ===== */
+.grid-legend-v14 { display:flex; flex-wrap:wrap; gap:8px 16px; font-size:12px; color:#374151; margin-bottom:10px; }
+.gl-item { display:inline-flex; align-items:center; gap:6px; }
+.gl-item.gl-sel { font-weight:700; text-decoration:underline; text-underline-offset:3px; }
+.gl-dim { color:#9ca3af; }
+.gl-box { display:inline-flex; align-items:center; justify-content:center; width:22px; height:16px; border-radius:4px; border:1px solid #e5e7eb; font-size:10px; background:#fff; }
+.gl-box.gl-now { background:#DBEAFE; border-color:#93C5FD; }
+.gchip { display:inline-block; min-width:22px; padding:1px 3px; border-radius:5px; font-weight:700; font-size:10px; line-height:13px; margin:1px; text-align:center; pointer-events:none; }
+.gchip-stu { box-shadow: inset 0 0 0 1.5px #BE8900; }
+.gchip-b2b { outline:2px solid #DC2626; outline-offset:0; }
+.grid-v14 th { background:#374151; }
+.grid-v14 th.month-header { background:#1F2937; }
+.grid-v14 th.now { background:#2563EB !important; }
+.grid-v14 th.no-mtg { background:#9CA3AF; }
+.grid-table td.week-cell.has-part, .grid-table td.week-cell.has-part:hover { background:#fff !important; }
+.grid-table td.week-cell.has-part:hover { box-shadow: inset 0 0 0 2px #c7d2fe; }
+.grid-table td.week-cell.now, .grid-table td.week-cell.has-part.now { background:#F0F7FF !important; }
+.grid-table td.week-cell.no-mtg { background:repeating-linear-gradient(45deg,#f9fafb,#f9fafb 4px,#f3f4f6 4px,#f3f4f6 8px) !important; }
+.grid-v14 td.week-cell { padding:2px 2px; min-width:30px; }
+.grid-v14 .name-cell { background:#fff; }
+.grid-v14 tr.grid-group td { background:#F3F4F6; font-weight:700; font-size:11px; letter-spacing:.04em; color:#374151; padding:4px 8px; text-align:left; border-left:none; border-right:none; }
+.grid-v14 tr.grid-group td.name-cell { background:#F3F4F6; }
+.gg-n { display:inline-block; margin-left:4px; font-size:10px; color:#6b7280; background:#fff; border-radius:999px; padding:0 6px; }
+.gbadge { display:inline-block; min-width:20px; text-align:center; font-size:10px; font-weight:700; border-radius:999px; padding:0 5px; margin-right:6px; color:#fff; }
+.gb-e { background:#1F2937; } .gb-ms { background:#BE8900; } .gb-b { background:#6B7280; }
+.grid-v14 .total-head { background:#1F2937; }
+.grid-v14 .total-cell { font-weight:700; color:#374151; background:#F9FAFB; min-width:34px; }
+.grid-v14 .sunday-indicator::after { top:1px; left:auto; right:1px; transform:none; font-size:8px; }
+
+
+/* ===== v15: load + preferred parts ===== */
+.load-tag, .pref-tag { display:inline-block; margin-left:5px; font-size:10px; font-weight:700; border-radius:999px; padding:0 6px; line-height:15px; vertical-align:middle; }
+.load-tag { background:#E0F2FE; color:#075985; }
+.pref-tag { background:#FEF3C7; color:#92400E; }
+.load-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:8px; font-size:12px; color:#374151; }
+.load-row select, .pref-select { border:1px solid #d1d5db; border-radius:6px; padding:1px 4px; font-size:12px; background:#fff; margin-left:4px; }
+.load-reason { flex:1; min-width:180px; border:1px solid #d1d5db; border-radius:6px; padding:2px 6px; font-size:12px; }
+.load-hint { color:#9ca3af; font-size:11px; }
+
+
+/* ===== v16: same part two months in a row ===== */
+.gchip-month { outline:2px dashed #D97706; outline-offset:0; }
+
+
+/* ===== v17: closable banner ===== */
+.banner-closable { position:relative; padding-right:34px; }
+.banner-x { position:absolute; top:6px; right:8px; border:none; background:transparent; color:#92400e; font-size:16px; line-height:1; cursor:pointer; padding:2px 4px; border-radius:6px; }
+.banner-x:hover { background:rgba(0,0,0,.06); }
+.banner-collapsed { display:inline-flex; align-items:center; gap:8px; font-size:12px; color:#6b7280; background:#f9fafb; border:1px solid #e5e7eb; border-radius:999px; padding:3px 10px; margin-bottom:10px; }
+.banner-link { border:none; background:none; color:#2563eb; font-weight:600; cursor:pointer; padding:0; font-size:12px; }
+.banner-link:hover { text-decoration:underline; }
+
+
+/* ===== v19: popup windows — buttons always visible ===== */
+/* Ang header at mga button ay laging buo; ang listahan sa gitna ang lumiliit/nag-i-scroll. */
+.modal-card { display:flex; flex-direction:column; max-height:85vh; }
+.modal-card > * { flex-shrink:0; }
+.modal-card > .modal-scroll { flex:1 1 auto; min-height:0; max-height:none; overflow-y:auto; }
+@media (max-height: 560px) { .modal-card { max-height:94vh; } .modal-card > .sticky { padding:12px 16px !important; } }

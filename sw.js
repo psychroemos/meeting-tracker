@@ -1,5 +1,5 @@
-/* Service Worker for Meeting Assignment Tracker (ATK) */
-const CACHE_NAME = 'atk-cache-v2';
+/* Service Worker for Assignment Tracker – Bagong Kongregasyon (NC) */
+const CACHE_NAME = 'nc-cache-v19';
 const ASSETS = [
   './',
   './index.html',
@@ -8,8 +8,10 @@ const ASSETS = [
   './manifest.json',
   './lib/tailwind-utilities.css',
   './lib/xlsx.bundle.min.js',
-  './lib/jspdf.umd.min.js',
   './lib/jszip.min.js',
+  './lib/s140-base.js',
+  './lib/pdf-lib.min.js',
+  './lib/s89-base.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-512-maskable.png'

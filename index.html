@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Meeting Assignment Tracker</title>
+    <title>Assignment Tracker – Bagong Kongregasyon</title>
     <link rel="stylesheet" href="lib/tailwind-utilities.css">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#374151">
@@ -12,8 +12,10 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Assignment Tracker">
     <script src="lib/xlsx.bundle.min.js"></script>
-    <script src="lib/jspdf.umd.min.js"></script>
     <script src="lib/jszip.min.js"></script>
+    <script src="lib/s140-base.js"></script>
+    <script src="lib/pdf-lib.min.js"></script>
+    <script src="lib/s89-base.js"></script>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -21,17 +23,17 @@
         <div class="max-w-7xl mx-auto">
             <!-- Header -->
             <div class="card p-8 mb-8">
-                <h1 class="text-4xl font-bold text-gray-900 mb-2">📋 Meeting Assignment Tracker</h1>
+                <h1 class="text-4xl font-bold text-gray-900 mb-2">📋 Assignment Tracker – Bagong Kongregasyon</h1>
                 <p class="text-gray-600 text-lg">Manage Thursday midweek meeting assignments fairly & easily</p>
             </div>
 
             <!-- Backup reminder banner -->
             <div id="backupReminder" class="hidden card p-4 mb-4" style="background:#fffbeb;border:1px solid #fde68a;">
                 <div class="flex items-center justify-between gap-3 flex-wrap">
-                    <span class="text-sm" style="color:#92400e;">⚠️ Matagal na mula noong huli mong pag-backup. I-save ang data mo para hindi mawala.</span>
+                    <span class="text-sm" style="color:#92400e;">⚠️ It has been a while since your last backup. Save your data so it isn't lost.</span>
                     <div class="flex gap-2">
-                        <button onclick="exportData()" class="btn-primary text-sm">💾 I-backup ngayon</button>
-                        <button onclick="document.getElementById('backupReminder').classList.add('hidden')" class="btn-secondary text-sm">Isara</button>
+                        <button onclick="exportData()" class="btn-primary text-sm">💾 Back up now</button>
+                        <button onclick="document.getElementById('backupReminder').classList.add('hidden')" class="btn-secondary text-sm">Close</button>
                     </div>
                 </div>
             </div>
@@ -50,7 +52,13 @@
                             📋 Assignments
                         </button>
                         <button onclick="switchView('pdfEditor')" id="pdfEditorBtn" class="btn-secondary">
-                            📄 PDF Editor
+                            📄 Schedule Editor
+                        </button>
+                        <button onclick="switchView('students')" id="studentsBtn" class="btn-secondary">
+                            🎓 Students
+                        </button>
+                        <button onclick="switchView('fairness')" id="fairnessBtn" class="btn-secondary">
+                            📊 Fairness
                         </button>
                         <button onclick="switchView('sunday')" id="sundayBtn" class="btn-secondary">
                             ☀️ Sunday
@@ -70,6 +78,25 @@
                 </div>
             </div>
 
+            <!-- Students View (Hakbang 2) -->
+            <div id="studentsView" class="hidden">
+                <div class="card p-8">
+                    <h2 class="text-2xl font-bold text-gray-900 mb-2">🎓 Student Parts</h2>
+                    <p class="text-gray-600 mb-4">Bible Reading and Apply Yourself to the Field Ministry. Names chosen here also appear in the Schedule Editor and on the S-140. ★ = top suggestion. Discussion parts (e.g. “Ano ang Sasabihin Mo?”) go to an elder or ministerial servant.</p>
+                    <input type="file" id="masterlistFileInput" accept=".xlsx,.xls" onchange="handleMasterlistImport(event)" class="hidden">
+                    <div id="studentsContent"></div>
+                </div>
+            </div>
+
+            <!-- Fairness Dashboard (v9) -->
+            <div id="fairnessView" class="hidden">
+                <div class="card p-8">
+                    <h2 class="text-2xl font-bold text-gray-900 mb-2">📊 Fairness</h2>
+                    <p class="text-gray-600 mb-4">Who has had parts, how often, and who has waited the longest — from the same data as the Assignments and Students tabs.</p>
+                    <div id="fairnessContent"></div>
+                </div>
+            </div>
+
             <!-- Sunday Assignments View (Simplified) -->
             <div id="sundayView" class="hidden">
                 <div class="card p-8">
@@ -83,19 +110,21 @@
             <div id="pdfEditorView" class="hidden">
                 <div class="card p-6">
                     <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
-                        <h2 class="text-2xl font-bold text-gray-900">📄 PDF Editor - Meeting Schedule</h2>
+                        <h2 class="text-2xl font-bold text-gray-900">📄 Schedule Editor</h2>
                         <div class="flex gap-2 flex-wrap">
                             <button onclick="document.getElementById('workbookFileInput').click()" class="btn-secondary" title="Import part titles, minutes & songs from a JW Meeting Workbook EPUB">📥 Import Workbook</button>
                             <input type="file" id="workbookFileInput" accept=".epub" onchange="handleWorkbookImport(event)" class="hidden">
-                            <button onclick="exportMeetingPDF()" class="btn-primary">📄 Export to PDF</button>
+                            <button onclick="exportS140Word()" class="btn-primary" title="Export the whole month as an S-140 Word document">📄 Export S-140 (Word)</button>
                         </div>
                     </div>
                     
+                    <div id="meetingSettingsPanel" class="mb-4"></div>
+                    <div id="specialWeeksPanel" class="mb-4"></div>
+
                     <!-- Congregation Header Preview -->
                     <div class="text-center mb-4 p-4 bg-gray-50 rounded-lg">
-                        <h3 class="text-lg font-bold">UP VILLAGE CONGREGATION</h3>
+                        <h3 class="text-lg font-bold" id="congNameHeader">[PANGALAN NG KONGREGASYON]</h3>
                         <p class="text-sm text-gray-600">OF JEHOVAH'S WITNESSES</p>
-                        <p class="text-xs text-gray-500">20 Mahusay Street, UP Village, Diliman, Quezon City</p>
                         <p class="text-sm font-semibold mt-2" id="pdfEditorMonthTitle">ATING BUHAY AT MINISTERYONG KRISTIYANO (<span id="pdfMonthYearLabel"></span>)</p>
                     </div>
 
@@ -115,11 +144,12 @@
                             <label class="font-medium text-gray-700 text-sm">Assignment:</label>
                             <select id="gridAssignmentType" onchange="renderGrid()" class="border-2 border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-gray-700 focus:outline-none">
                             </select>
-                            <input type="text" id="gridSearchInput" oninput="updateGridSearch()" placeholder="🔍 Hanapin ang pangalan..." class="border-2 border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-gray-700 focus:outline-none">
+                            <input type="text" id="gridSearchInput" oninput="updateGridSearch()" placeholder="🔍 Search name..." class="border-2 border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-gray-700 focus:outline-none">
                             <button onclick="showAssignmentSelectionModal()" class="btn-secondary text-sm">
                                 🎯 Manage Selection
                             </button>
-                            <button onclick="startAutoAssign()" class="btn-primary text-sm" title="Auto-fill empty slots fairly across visible months">
+                            <span id="autoRangeGrid"></span>
+                            <button onclick="startAutoAssign()" class="btn-primary text-sm" title="Auto-fill empty slots fairly in the chosen months">
                                 ✨ Auto-Assign
                             </button>
                             <button onclick="clearAssignmentsForSelectedMonth()" class="btn-secondary text-sm" title="Clear all assignments for the selected month">
@@ -139,57 +169,8 @@
                         <div class="month-scroll-pills" id="monthScrollPills"></div>
                         <button onclick="shiftMonthRange(1)" class="month-scroll-arrow" title="Next month">▶</button>
                     </div>
-                    <div class="grid-legend">
-                        <div class="grid-legend-item">
-                            <div class="grid-legend-box type-0"></div>
-                            <span>Opening Prayer</span>
-                        </div>
-                        <div class="grid-legend-item">
-                            <div class="grid-legend-box type-1"></div>
-                            <span>OCLM Chairman</span>
-                        </div>
-                        <div class="grid-legend-item">
-                            <div class="grid-legend-box type-2"></div>
-                            <span>10 mins talk</span>
-                        </div>
-                        <div class="grid-legend-item">
-                            <div class="grid-legend-box type-3"></div>
-                            <span>Espiritual na Hiyas</span>
-                        </div>
-                        <div class="grid-legend-item">
-                            <div class="grid-legend-box type-4"></div>
-                            <span>Auxiliary Class</span>
-                        </div>
-                        <div class="grid-legend-item">
-                            <div class="grid-legend-box type-5"></div>
-                            <span>Pamumuhay</span>
-                        </div>
-                        <div class="grid-legend-item">
-                            <div class="grid-legend-box type-6"></div>
-                            <span>CBS</span>
-                        </div>
-                        <div class="grid-legend-item">
-                            <div class="grid-legend-box type-7"></div>
-                            <span>CBS Reader</span>
-                        </div>
-                        <div class="grid-legend-item">
-                            <div class="grid-legend-box type-8"></div>
-                            <span>Closing prayer</span>
-                        </div>
-                        <div class="grid-legend-item">
-                            <div class="grid-legend-box empty"></div>
-                            <span>Available</span>
-                        </div>
-                        <div class="grid-legend-item">
-                            <div class="grid-legend-box trail"></div>
-                            <span>Trail (Jan 1 → last assignment)</span>
-                        </div>
-                        <div class="grid-legend-item">
-                            <div class="grid-legend-box sunday">☀️</div>
-                            <span>Has Sunday Assignment</span>
-                        </div>
-                    </div>
-                    <p class="text-sm text-gray-600 mb-4">Click on a cell to assign/unassign. <strong>Trail shows from Jan 1 to last assignment</strong> - shorter trail = needs assignment for selected type. No trail = never assigned this type.</p>
+                    <div class="grid-legend grid-legend-v14" id="gridLegend"></div>
+                    <p class="text-sm text-gray-600 mb-4">Click a cell to assign/unassign the selected part. Each part shows its short code; gold-edged codes are Students-tab parts. A <strong>red ring</strong> means the brother also has a part the meeting before or after. A <strong>dashed amber ring</strong> means his previous or next part (within 8 weeks) is the same part — a different part in between is fine. The light <strong>trail</strong> runs up to the last time he had the selected part — no trail = never had it.</p>
                     <div class="grid-container" id="gridContainer"></div>
                 </div>
             </div>
@@ -198,12 +179,12 @@
 
     <!-- Assignment Selection Modal -->
     <div id="assignmentSelectionModal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 z-50">
-        <div class="card shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden">
+        <div class="card modal-card shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden">
             <div class="sticky top-0 bg-white border-b-2 border-gray-200 p-6">
                 <div class="flex items-start justify-between">
                     <div>
                         <h3 class="text-xl font-semibold text-gray-900 mb-1">🎯 Manage Assignment Selection</h3>
-                        <p class="text-gray-600 text-sm">Toggle who can be chosen for assignment slots and Sunday picks.</p>
+                        <p class="text-gray-600 text-sm">Toggle who can be chosen, set a lighter <b>Load</b> (½, ⅓) for brothers with other heavy duties, and mark ★ parts someone should get more often (in ⚙️ Eligibility).</p>
                     </div>
                     <button onclick="closeAssignmentSelectionModal()" class="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
                 </div>
@@ -212,7 +193,7 @@
                     <select id="assignmentSelectionCategory" class="border-2 border-gray-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-gray-400">
                         <option value="Elder">Elder</option>
                             <option value="MS">MS</option>
-                            <option value="Brother">Brother</option>
+                            <option value="Brother">Brother (CBS Reader only)</option>
                     </select>
                     <button onclick="addNameToAssignmentSelection()" class="btn-primary">Add</button>
                 </div>
@@ -226,7 +207,7 @@
 
     <!-- Auto-Assign Preview Modal -->
     <div id="autoAssignModal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 z-50">
-        <div class="card shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden">
+        <div class="card modal-card shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden">
             <div class="sticky top-0 bg-white border-b-2 border-gray-200 p-6">
                 <div class="flex items-start justify-between">
                     <div>
@@ -239,14 +220,36 @@
             <div class="modal-scroll p-6" id="autoAssignContent"></div>
             <div class="border-t-2 border-gray-200 p-4 flex gap-2">
                 <button onclick="applyAutoAssign()" class="btn-primary flex-1" id="autoAssignApplyBtn">✅ Apply All</button>
+                <button onclick="startAutoAssign()" class="btn-secondary flex-1" title="Draw again — fairness and spacing rules stay the same">🔀 Shuffle Again</button>
                 <button onclick="closeAutoAssignModal()" class="btn-secondary flex-1">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Student Auto-Assign Preview Modal -->
+    <div id="studentAutoModal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 z-50">
+        <div class="card modal-card shadow-2xl max-w-3xl w-full max-h-[85vh] overflow-hidden">
+            <div class="sticky top-0 bg-white border-b-2 border-gray-200 p-6">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <h3 class="text-xl font-semibold text-gray-900 mb-1">✨ Student Auto-Assign Preview</h3>
+                        <p class="text-gray-600 text-sm" id="studentAutoSummary">Review the proposed names before applying. Only empty slots are filled.</p>
+                    </div>
+                    <button onclick="closeStudentAutoModal()" class="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
+                </div>
+            </div>
+            <div class="modal-scroll p-6" id="studentAutoContent"></div>
+            <div class="border-t-2 border-gray-200 p-4 flex gap-2">
+                <button onclick="applyStudentAutoAssign()" class="btn-primary flex-1" id="studentAutoApplyBtn">✅ Apply All</button>
+                <button onclick="startStudentAutoAssign()" class="btn-secondary flex-1" title="Draw again — fairness rules stay the same">🔀 Shuffle Again</button>
+                <button onclick="closeStudentAutoModal()" class="btn-secondary flex-1">Cancel</button>
             </div>
         </div>
     </div>
 
     <!-- Import Workbook Preview Modal -->
     <div id="workbookModal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 z-50">
-        <div class="card shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden">
+        <div class="card modal-card shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden">
             <div class="sticky top-0 bg-white border-b-2 border-gray-200 p-6">
                 <div class="flex items-start justify-between">
                     <div>
@@ -268,7 +271,7 @@
 
     <!-- Assignment Modal -->
     <div id="assignModal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 z-50">
-        <div class="card shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden">
+        <div class="card modal-card shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden">
             <div class="sticky top-0 bg-white border-b-2 border-gray-200 p-6">
                 <div class="flex items-start justify-between">
                     <div>
@@ -293,8 +296,6 @@
             </div>
         </div>
     </div>
-
-    <!-- PDF Export Modal -->
 
     <!-- Brother Details Modal -->
 

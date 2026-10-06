@@ -2095,19 +2095,54 @@
             return minutes ? `${base} (${minutes} min.)` : base;
         }
 
-        function wbWeekToThursday(label) {
-            const up = (label || '').toUpperCase();
-            const m = up.match(/([A-ZÑ]+)\s+(\d+)/);
+function wbWeekToThursday(label, ctx) {
+            // v30: kailangan ang "BUWAN ARAW" sa simula (hal. "ENERO 4-10"); ang cover page ("…Enero-Pebrero 2027") ay nilalaktawan
+            const up = (label || '').toUpperCase().trim();
+            const m = up.match(/^([A-ZÑ]+)\s+(\d{1,2})(?!\d)/);
             if (!m) return null;
             const month = WB_MONTHS_TG[m[1]];
             const day = parseInt(m[2], 10);
-            let year = 2026;
+            if (!month || day < 1 || day > 31) return null;
+            let year;
             const ym = up.match(/(\d{4})/);
-            if (ym) year = parseInt(ym[1], 10);
-            if (!month) return null;
-            const monday = new Date(`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}T12:00:00+08:00`);
-            const thu = new Date(monday.getTime() + 3 * 86400000);
-            return `${thu.getFullYear()}-${String(thu.getMonth()+1).padStart(2,'0')}-${String(thu.getDate()).padStart(2,'0')}`;
+            if (ym) year = parseInt(ym[1], 10);                       // tahasang taon sa label (hal. "DISYEMBRE 28, 2026–ENERO 3, 2027")
+            else if (ctx && ctx.year) {
+                // taon ng workbook (mula sa cover / pangalan ng file); kung tumawid ng taon (Dis sa isyung Ene, o Ene sa isyung Nob)
+                year = ctx.year;
+                const diff = month - (ctx.month || month);
+                if (diff > 6) year -= 1; else if (diff < -6) year += 1;
+            } else {
+                // walang ibang palatandaan: ang taon na pinakamalapit sa ngayon
+                const [ty, tm] = manilaTodayISO().split('-').map(Number);
+                year = ty;
+                const diff = month - tm;
+                if (diff > 6) year -= 1; else if (diff < -6) year += 1;
+            }
+            const mon = new Date(Date.UTC(year, month - 1, day));
+            if (mon.getUTCMonth() !== month - 1 || mon.getUTCDate() !== day) return null;   // hal. PEBRERO 30
+            const thu = new Date(mon.getTime() + 3 * 86400000);
+            return `${thu.getUTCFullYear()}-${String(thu.getUTCMonth() + 1).padStart(2, '0')}-${String(thu.getUTCDate()).padStart(2, '0')}`;
+        }
+        // v30: taon at unang buwan ng workbook — mula sa cover page ("…Enero-Pebrero 2027"), sa .opf, o sa pangalan ng file (mwb_TG_202701)
+        function wbIssueContext(fileName, coverText) {
+            const fm = String(fileName || '').match(/(?:^|[^\d])(20\d{2})(0[1-9]|1[0-2])(?!\d)/);
+            if (fm) return { year: +fm[1], month: +fm[2] };
+            const up = String(coverText || '').toUpperCase();
+            const y = up.match(/(20\d{2})/);
+            if (!y) return null;
+            const mm = Object.keys(WB_MONTHS_TG).map(k => ({ k, i: up.indexOf(k) })).filter(x => x.i >= 0).sort((a, b) => a.i - b.i)[0];
+            return { year: +y[1], month: mm ? WB_MONTHS_TG[mm.k] : 0 };
+        }
+        // v30: ang Huwebes na maling nakuha ng lumang bersyon (laging 2026) — para malinis ang naiwang maling linggo
+        function wbLegacyThursday(label) {
+            const up = (label || '').toUpperCase();
+            const m = up.match(/([A-ZÑ]+)\s+(\d+)/);
+            if (!m || /\d{4}/.test(up)) return null;
+            const month = WB_MONTHS_TG[m[1]], day = parseInt(m[2], 10);
+            if (!month || day > 31) return null;
+            const mon = new Date(Date.UTC(2026, month - 1, day));
+            const thu = new Date(mon.getTime() + 3 * 86400000);
+            return `${thu.getUTCFullYear()}-${String(thu.getUTCMonth() + 1).padStart(2, '0')}-${String(thu.getUTCDate()).padStart(2, '0')}`;
         }
 
         function wbParseWeek(html) {
@@ -2143,10 +2178,17 @@
                     .filter(n => /OEBPS\/\d{9}\.xhtml$/.test(n) && !n.includes('extracted') && !n.endsWith('400.xhtml'))
                     .sort();
                 const weeks = [];
+                // v30: alamin ang taon ng workbook (hindi na laging 2026)
+                let coverText = '';
+                const opfName = Object.keys(zip.files).find(n => /\.opf$/i.test(n));
+                if (opfName) { const o = await zip.files[opfName].async('string'); const t = o.match(/<dc:title[^>]*>([^<]*)/); if (t) coverText += t[1] + ' '; }
+                const coverName = Object.keys(zip.files).find(n => /OEBPS\/\d{6}000\.xhtml$/.test(n));
+                if (coverName) { const c = await zip.files[coverName].async('string'); const h = c.match(/<h1[^>]*>(.*?)<\/h1>/s); if (h) coverText += wbStripTags(h[1]); }
+                const issue = wbIssueContext(file.name, coverText);
                 for (const name of weekly) {
                     const content = await zip.files[name].async('string');
                     const d = wbParseWeek(content);
-                    const thu = wbWeekToThursday(d.weekLabel);
+                    const thu = wbWeekToThursday(d.weekLabel, issue);
                     if (!thu) continue;
                     const kayaman = d.parts.filter(p => p.sec === 'kayaman');
                     const part1 = kayaman.find(p => /^1\./.test(p.title));
@@ -2154,6 +2196,7 @@
                     const living = d.parts.filter(p => p.sec === 'living' && /^\d+\./.test(p.title) && !/Pag-aaral ng Kongregasyon/i.test(p.title));
                     weeks.push({
                         thursday: thu,
+                        legacyThursday: wbLegacyThursday(d.weekLabel),
                         weekLabel: d.weekLabel,
                         bibleReading: d.bible,
                         openingSong: d.songs[0] || '',
@@ -2178,11 +2221,12 @@
             const container = document.getElementById('workbookContent');
             const summary = document.getElementById('workbookSummary');
             const weeks = workbookPreview || [];
-            if (summary) summary.textContent = `${weeks.length} week(s) found — ${weeks[0].thursday} to ${weeks[weeks.length-1].thursday}. Only empty fields will be filled (manual entries preserved).`;
+            const nice = d => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            if (summary) summary.textContent = `${weeks.length} week(s) found — Thursday ${nice(weeks[0].thursday)} to ${nice(weeks[weeks.length-1].thursday)}. Only empty fields will be filled (manual entries preserved).`;
             let html = '';
             weeks.forEach(w => {
                 html += `<div class="mb-3 border border-gray-200 rounded-lg p-3">
-                    <div class="font-bold text-gray-900">${w.weekLabel} <span class="text-xs text-gray-500">(${w.thursday})</span></div>
+                    <div class="font-bold text-gray-900">${w.weekLabel} <span class="text-xs text-gray-500">(Thu ${nice(w.thursday)})</span></div>
                     <div class="text-xs text-gray-600 mb-1">${w.bibleReading} &bull; Awit ${w.openingSong}/${w.middleSong}/${w.closingSong}</div>
                     <div class="text-sm text-gray-800">1. ${w.part1Title}</div>
                     ${w.ministryParts.map(p => `<div class="text-sm text-gray-700" style="padding-left:10px;">- ${p.title}</div>`).join('')}
@@ -2196,6 +2240,20 @@
             const weeks = workbookPreview || [];
             if (weeks.length === 0) { closeWorkbookModal(); return; }
             loadMeetingEditorData();
+            // v30: alisin ang mga linggong maling nailagay ng lumang bersyon sa 2026 (hal. Ene–Peb 2027 → Ene–Peb 2026),
+            // pero kung galing lang sa workbook ang laman (walang pangalan, parehong pamagat)
+            const movedOff = [];
+            weeks.forEach(w => {
+                if (!w.legacyThursday || w.legacyThursday === w.thursday) return;
+                const lk = getMeetingEditorKey(w.legacyThursday);
+                const old = meetingEditorData[lk];
+                if (!old || !w.part1Title || old.part1Title !== w.part1Title) return;
+                const hasName = Object.entries(old).some(([f, v]) => /(Name|Id|^chairman|^name|^assistant)$/i.test(f) && v) ||
+                    (old.ministryParts || []).some(p => p && (p.name || p.assistant || p.studentId || p.assistantId));
+                if (hasName) return;
+                delete meetingEditorData[lk];
+                movedOff.push(w.legacyThursday);
+            });
             weeks.forEach(w => {
                 const key = getMeetingEditorKey(w.thursday);
                 if (!meetingEditorData[key]) meetingEditorData[key] = {};
@@ -2221,7 +2279,9 @@
             closeWorkbookModal();
             if (currentView === 'pdfEditor') renderPdfEditor();
             if (currentView === 'students') renderStudentsView();
-            alert(`Workbook imported! Filled in the empty fields for ${weeks.length} week(s). Names still come from the Assignments and Students tabs.`);
+            const nice = d => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            alert(`Workbook imported! Filled in the empty fields for ${weeks.length} week(s): Thursday ${nice(weeks[0].thursday)} to ${nice(weeks[weeks.length - 1].thursday)}.\nNames still come from the Assignments and Students tabs.` +
+                (movedOff.length ? `\n\nAlso cleaned ${movedOff.length} week(s) that an earlier import put in the wrong year (${nice(movedOff[0])} – ${nice(movedOff[movedOff.length - 1])}).` : ''));
         }
 
         function closeWorkbookModal() {

@@ -1,5 +1,5 @@
 /* Service Worker for Assignment Tracker – Bagong Kongregasyon (NC) */
-const CACHE_NAME = 'nc-cache-v29';
+const CACHE_NAME = 'nc-cache-v30';
 const ASSETS = [
   './',
   './index.html',

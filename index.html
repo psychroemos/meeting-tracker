@@ -13,8 +13,7 @@
     <meta name="apple-mobile-web-app-title" content="Assignment Tracker">
     <script src="lib/xlsx.bundle.min.js"></script>
     <script src="lib/jszip.min.js"></script>
-    <script src="lib/s140-base.js"></script>
-    <script src="lib/pdf-lib.min.js"></script>
+        <script src="lib/pdf-lib.min.js"></script>
     <script src="lib/s89-base.js"></script>
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -114,7 +113,8 @@
                         <div class="flex gap-2 flex-wrap">
                             <button onclick="document.getElementById('workbookFileInput').click()" class="btn-secondary" title="Import part titles, minutes & songs from a JW Meeting Workbook EPUB">📥 Import Workbook</button>
                             <input type="file" id="workbookFileInput" accept=".epub" onchange="handleWorkbookImport(event)" class="hidden">
-                            <button onclick="exportS140Word()" class="btn-primary" title="Export the whole month as an S-140 Word document">📄 Export S-140 (Word)</button>
+                            <button onclick="exportS140Pdf()" class="btn-primary" title="Export the whole month as an S-140 PDF (saved to the schedule folder)">📄 Export S-140 (PDF)</button>
+                            <button onclick="changeScheduleFolder()" class="btn-secondary text-sm" title="Choose a different folder for the S-140 and S-89 PDFs">📁</button>
                         </div>
                     </div>
                     
@@ -165,9 +165,12 @@
                     </div>
                     <!-- Month scroll navigation -->
                     <div class="month-scroll-bar mb-4">
+                        <button onclick="gridPageBack()" class="month-scroll-arrow" title="Back one page of months">«</button>
                         <button onclick="shiftMonthRange(-1)" class="month-scroll-arrow" title="Previous month">◀</button>
                         <div class="month-scroll-pills" id="monthScrollPills"></div>
                         <button onclick="shiftMonthRange(1)" class="month-scroll-arrow" title="Next month">▶</button>
+                        <button onclick="gridPageForward()" class="month-scroll-arrow" title="Forward one page of months">»</button>
+                        <span class="grid-range-controls" id="gridRangeControls"></span>
                     </div>
                     <div class="grid-legend grid-legend-v14" id="gridLegend"></div>
                     <p class="text-sm text-gray-600 mb-4">Click a cell to assign/unassign the selected part. Each part shows its short code; gold-edged codes are Students-tab parts. A <strong>red ring</strong> means the brother also has a part the meeting before or after. A <strong>dashed amber ring</strong> means his previous or next part (within 8 weeks) is the same part — a different part in between is fine. The light <strong>trail</strong> runs up to the last time he had the selected part — no trail = never had it.</p>

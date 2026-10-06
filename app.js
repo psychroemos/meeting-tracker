@@ -44,7 +44,8 @@
         let workbookPreview = null;
         let meetingEditorData = {}; // Stores editable fields for PDF editor
         let gridStartMonth = 1; // 1-12, the first month shown in the grid
-        const GRID_MONTH_COUNT = 6; // number of months visible at once
+        let gridStartYear = null; // v24: taon ng unang buwan sa grid (null = taon ng Select Month)
+        const GRID_MONTH_COUNT = 6; // default number of months visible at once (v24: 3 / 6 / 12, naaalala)
         let gridSearchTerm = '';
         let expandedEligibilityId = null;
 
@@ -78,42 +79,93 @@
         }
 
         // Set grid start month based on selected month (center it in the visible range)
-        function updateGridStartMonth() {
-            const monthStr = document.getElementById('monthSelect').value;
-            const [, month] = monthStr.split('-').map(Number);
-            // Try to place selected month near the start so user can see ahead
-            gridStartMonth = Math.max(1, Math.min(month, 12 - GRID_MONTH_COUNT + 1));
-            renderMonthScrollPills();
+        // ===== v24: grid na gumagalaw sa iba't ibang taon =====
+        function getGridMonthCount() {
+            const v = Number(localStorage.getItem('nc_gridMonths'));
+            return [3, 6, 12].includes(v) ? v : GRID_MONTH_COUNT;
         }
-
-        // Render the month pill buttons
-        function renderMonthScrollPills() {
-            const container = document.getElementById('monthScrollPills');
-            if (!container) return;
-            const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-            const endMonth = Math.min(gridStartMonth + GRID_MONTH_COUNT - 1, 12);
-            let html = '';
-            for (let m = 1; m <= 12; m++) {
-                const isActive = m === gridStartMonth;
-                const inRange = m >= gridStartMonth && m <= endMonth;
-                const cls = isActive ? 'month-pill active' : inRange ? 'month-pill in-range' : 'month-pill';
-                html += `<button class="${cls}" onclick="setGridStartMonth(${m})">${monthNames[m - 1]}</button>`;
+        function gridSelectedYear() {
+            const v = document.getElementById('monthSelect')?.value || manilaTodayISO().slice(0, 7);
+            return Number(v.split('-')[0]) || Number(manilaTodayISO().slice(0, 4));
+        }
+        function gridStartKey() {
+            const y = gridStartYear || gridSelectedYear();
+            const m = Math.min(12, Math.max(1, Number(gridStartMonth) || 1));
+            return `${y}-${String(m).padStart(2, '0')}`;
+        }
+        // Listahan ng mga buwang nakikita: [{ key: 'YYYY-MM', y, m }]
+        function gridMonthList() {
+            const start = gridStartKey(), out = [];
+            for (let i = 0; i < getGridMonthCount(); i++) {
+                const key = addMonthsKey(start, i);
+                const [y, m] = key.split('-').map(Number);
+                out.push({ key, y, m });
             }
-            container.innerHTML = html;
+            return out;
         }
-
-        // Set start month directly (from clicking a pill)
-        function setGridStartMonth(m) {
-            gridStartMonth = Math.max(1, Math.min(m, 12 - GRID_MONTH_COUNT + 1));
+        function gridMonthLabel(key, short) {
+            const [y, m] = key.split('-').map(Number);
+            const names = short ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+                : ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+            return `${names[m - 1]} ${y}`;
+        }
+        function setGridStartKey(key) {
+            if (!/^\d{4}-\d{2}$/.test(key || '')) return;
+            const [y, m] = key.split('-').map(Number);
+            gridStartYear = y; gridStartMonth = m;
             renderMonthScrollPills();
             renderGrid();
         }
+        // Kapag pinalitan ang Select Month: isang buwan bago nito ang simula, para kita rin ang nakaraang buwan
+        function updateGridStartMonth() {
+            const sel = document.getElementById('monthSelect')?.value;
+            const key = /^\d{4}-\d{2}$/.test(sel || '') ? addMonthsKey(sel, -1) : addMonthsKey(manilaTodayISO().slice(0, 7), -1);
+            const [y, m] = key.split('-').map(Number);
+            gridStartYear = y; gridStartMonth = m;
+            renderMonthScrollPills();
+        }
 
-        // Shift month range by delta (-1 = left, +1 = right)
+        // Render the month pill buttons (v24: 6 buwan bago at pagkatapos ng nakikita, tumatawid ng taon)
+        function renderMonthScrollPills() {
+            const container = document.getElementById('monthScrollPills');
+            const count = getGridMonthCount(), start = gridStartKey(), end = addMonthsKey(start, count - 1);
+            const nowKey = manilaTodayISO().slice(0, 7);
+            if (container) {
+                let html = '';
+                const first = addMonthsKey(start, -6), total = count + 12;
+                for (let i = 0; i < total; i++) {
+                    const k = addMonthsKey(first, i);
+                    const [y, m] = k.split('-').map(Number);
+                    const cls = 'month-pill' + (k === start ? ' active' : (k > start && k <= end) ? ' in-range' : '') + (k === nowKey ? ' now' : '');
+                    if (i === 0 || m === 1) html += `<span class="pill-year">${y}</span>`;
+                    html += `<button class="${cls}" title="${gridMonthLabel(k)}${k === nowKey ? ' (this month)' : ''}" onclick="setGridStartKey('${k}')">${gridMonthLabel(k, true).split(' ')[0]}</button>`;
+                }
+                container.innerHTML = html;
+            }
+            const ctl = document.getElementById('gridRangeControls');
+            if (ctl) {
+                ctl.innerHTML = `<span class="grid-range-label">${gridMonthLabel(start, true)} – ${gridMonthLabel(end, true)}</span>
+                    <label class="grid-range-count">Show <select onchange="setGridMonthCount(this.value)">${[3, 6, 12].map(n => `<option value="${n}" ${n === count ? 'selected' : ''}>${n} months</option>`).join('')}</select></label>
+                    <button class="btn-secondary text-sm" onclick="gridJumpToday()" title="Start from last month">📍 Today</button>`;
+            }
+        }
+
+        // Set start month directly (luma: buwan lang, sa kasalukuyang taon ng grid)
+        function setGridStartMonth(m) {
+            setGridStartKey(`${gridStartYear || gridSelectedYear()}-${String(Math.min(12, Math.max(1, Number(m) || 1))).padStart(2, '0')}`);
+        }
+
+        // Shift month range by delta (-1 = left, +1 = right) — v24: walang hangganan, tumatawid ng taon
         function shiftMonthRange(delta) {
-            const newStart = gridStartMonth + delta;
-            if (newStart < 1 || newStart > 12 - GRID_MONTH_COUNT + 1) return;
-            gridStartMonth = newStart;
+            setGridStartKey(addMonthsKey(gridStartKey(), Number(delta) || 0));
+        }
+        function gridPageBack() { shiftMonthRange(-getGridMonthCount()); }
+        function gridPageForward() { shiftMonthRange(getGridMonthCount()); }
+        function gridJumpToday() { setGridStartKey(addMonthsKey(manilaTodayISO().slice(0, 7), -1)); }
+        function setGridMonthCount(n) {
+            const v = Number(n);
+            if (![3, 6, 12].includes(v)) return;
+            localStorage.setItem('nc_gridMonths', String(v));
             renderMonthScrollPills();
             renderGrid();
         }
@@ -144,9 +196,11 @@
             
             
             // Auto-fix names: convert "Last, First" or "Last. First" to "First Last"
+            // v23: huwag galawin kung tugma na sa isang tao sa Roster (hal. "Domingo Jr. Nasayao")
             let namesFixed = false;
+            const rosterNames = new Set(people.map(p => normalizeBrotherName(`${p.first} ${p.last}`)));
             brothers.forEach(brother => {
-                if (brother.name) {
+                if (brother.name && !rosterNames.has(normalizeBrotherName(brother.name))) {
                     // Handle comma separator
                     if (brother.name.includes(',')) {
                         const parts = brother.name.split(',').map(p => p.trim());
@@ -524,7 +578,13 @@
                 html += `<div class="rounded-xl border border-gray-200 p-3">
                     <div class="flex items-center justify-between gap-3">
                         <div>
-                            <div class="font-semibold text-gray-900">${brother.name}</div>
+                            ${editingBrotherId === brother.id ? `<div class="bro-edit">
+                                <input id="editBrotherName" value="${escHtml(brother.name)}" onkeydown="if(event.key==='Enter')saveBrotherRename('${brother.id}');if(event.key==='Escape')cancelBrotherRename()">
+                                <button class="btn-primary text-sm" onclick="saveBrotherRename('${brother.id}')">💾 Save</button>
+                                <button class="btn-secondary text-sm" onclick="cancelBrotherRename()">Cancel</button></div>`
+                            : `<div class="font-semibold text-gray-900">${escHtml(brother.name)}
+                                <button class="stu-x" title="Rename" onclick="startBrotherRename('${brother.id}')">✏️</button>
+                                ${findRosterPersonForBrother(brother) ? '' : `<span class="bro-unlinked" title="No one in the Students-tab Roster has this exact name, so his Students-tab parts (Bible reading, student parts) are not counted for spacing/fairness here. Rename to match the Roster.">⚠ not in Roster</span>`}</div>`}
                             <div class="text-xs text-gray-500">${selected ? 'Included in assignment picks' : 'Excluded from assignment picks'} • ${getBrotherCategory(brother)}${loadTags(brother)}</div>
                         </div>
                         <div class="flex gap-2">
@@ -1031,15 +1091,9 @@
 
         // Get all Thursdays for the visible month range (grouped by week-start month)
         function getThursdaysForYear() {
-            const monthStr = document.getElementById('monthSelect').value;
-            const [selectedYear] = monthStr.split('-').map(Number);
-            const startMonth = gridStartMonth;
-            const endMonth = Math.min(gridStartMonth + GRID_MONTH_COUNT - 1, 12);
+            // v24: naka-key sa 'YYYY-MM', puwedeng tumawid ng taon
             const allThursdays = {};
-            
-            for (let month = startMonth; month <= endMonth; month++) {
-                allThursdays[month] = getThursdaysForMonthByWeekStart(selectedYear, month);
-            }
+            gridMonthList().forEach(({ key, y, m }) => { allThursdays[key] = getThursdaysForMonthByWeekStart(y, m); });
             return allThursdays;
         }
 
@@ -1057,11 +1111,7 @@
 
             const selectedType = document.getElementById('gridAssignmentType')?.value || ASSIGNMENT_TYPES[0];
             const thursdaysByMonth = getThursdaysForYear();
-            const monthStr = document.getElementById('monthSelect').value;
-            const [selectedYear] = monthStr.split('-').map(Number);
-            const startMonth = gridStartMonth;
-            const endMonth = Math.min(gridStartMonth + GRID_MONTH_COUNT - 1, 12);
-            const monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+            const gridMonthsList = gridMonthList(); // v24
 
             if (brothers.length === 0) {
                 container.innerHTML = '<p class="text-gray-500 text-center py-8">No brothers yet. Import names in Brothers View first.</p>';
@@ -1070,7 +1120,7 @@
 
             // Calculate max weeks per month for colspan
             let maxWeeks = {};
-            for (let m = startMonth; m <= endMonth; m++) {
+            for (const { key: m } of gridMonthsList) {
                 maxWeeks[m] = thursdaysByMonth[m].length;
             }
 
@@ -1079,15 +1129,15 @@
             const thisThu = thursdayOfWeek(manilaTodayISO());
             const stuMap = studentTabPartsByName();
             let totalWeeks = 0;
-            for (let m = startMonth; m <= endMonth; m++) totalWeeks += thursdaysByMonth[m].length;
+            for (const { key: m } of gridMonthsList) totalWeeks += thursdaysByMonth[m].length;
 
             let html = renderS38ConflictBanner() + renderSpacingBanner() + '<table class="grid-table grid-v14">';
             
             // Header row 1: Month names
             html += '<thead><tr><th class="name-cell" rowspan="2">Name</th>';
-            for (let m = startMonth; m <= endMonth; m++) {
+            for (const { key: m } of gridMonthsList) {
                 if (maxWeeks[m] > 0) {
-                    html += `<th class="month-header" colspan="${maxWeeks[m]}">${monthNames[m]}</th>`;
+                    html += `<th class="month-header${m.endsWith('-01') ? ' year-start' : ''}" colspan="${maxWeeks[m]}">${gridMonthLabel(m)}</th>`;
                 }
             }
             html += '<th class="total-head" rowspan="2" title="All parts in the months shown (incl. Students tab)">Total</th></tr>';
@@ -1095,7 +1145,7 @@
             // Header row 2: Week numbers (dates)
             html += '<tr>';
             const selectedTypeIndex = ASSIGNMENT_TYPES.indexOf(selectedType);
-            for (let m = startMonth; m <= endMonth; m++) {
+            for (const { key: m } of gridMonthsList) {
                 thursdaysByMonth[m].forEach((dateStr, idx) => {
                     const day = parseInt(dateStr.split('-')[2]);
                     // Check if this week has an assignment for the selected type
@@ -1109,7 +1159,7 @@
 
             // Collect all Thursdays in order for trail calculation and badge counts
             const allThursdaysList = [];
-            for (let m = startMonth; m <= endMonth; m++) {
+            for (const { key: m } of gridMonthsList) {
                 thursdaysByMonth[m].forEach(d => allThursdaysList.push(d));
             }
             const visibleDatesSet = new Set(allThursdaysList);
@@ -1179,7 +1229,7 @@
                 const lockTitle = broOnlyRow ? 'Brothers (not Elder/MS): CBS Reader only' : readerRow ? 'CBS Reader goes to ministerial servants and brothers' : 'S-38: elder only for this assignment';
                 html += `<tr class="${elderOnlyRow ? 'row-elder-only' : ''}"><td class="name-cell ${rowClass}" ${elderOnlyRow ? `title="${lockTitle}"` : ''}><span class="gbadge ${bCls}">${bLbl}</span>${brother.name}${loadTags(brother)}${countBadge}${elderOnlyRow ? `<span class="elder-only-tag">${lockTag}</span>` : ''}</td>`;
                 
-                for (let m = startMonth; m <= endMonth; m++) {
+                for (const { key: m } of gridMonthsList) {
                     thursdaysByMonth[m].forEach(dateStr => {
                         // Find ANY assignment for this brother on this date
                         const assignmentOnDate = assignments.find(a => 
@@ -1309,22 +1359,22 @@
                 req.onerror = () => reject(req.error);
             });
         }
-        async function idbGetHandle() {
+        async function idbGetHandle(key = 'backupDir') {
             try {
                 const db = await idbOpen();
                 return await new Promise((resolve) => {
                     const tx = db.transaction('handles', 'readonly');
-                    const r = tx.objectStore('handles').get('backupDir');
+                    const r = tx.objectStore('handles').get(key);
                     r.onsuccess = () => resolve(r.result || null);
                     r.onerror = () => resolve(null);
                 });
             } catch (e) { return null; }
         }
-        async function idbSetHandle(handle) {
+        async function idbSetHandle(handle, key = 'backupDir') {
             try {
                 const db = await idbOpen();
                 const tx = db.transaction('handles', 'readwrite');
-                tx.objectStore('handles').put(handle, 'backupDir');
+                if (handle) tx.objectStore('handles').put(handle, key); else tx.objectStore('handles').delete(key);
             } catch (e) { /* ignore */ }
         }
 
@@ -1339,14 +1389,17 @@
             URL.revokeObjectURL(url);
         }
 
-        async function saveToBackups(filename, blob) {
+        // v27: pangkalahatang pag-save sa isang folder na pinili minsan (naaalala sa IndexedDB sa ilalim ng `key`)
+        let lastSaveFolderName = '';
+        async function saveToDir(key, pickerId, filename, blob, startInKey) {
+            lastSaveFolderName = '';
             // Fallback path when the API is not available (e.g. file://, unsupported browser)
             if (!window.showDirectoryPicker) {
                 downloadBlobFallback(filename, blob);
                 return 'download';
             }
             try {
-                let dir = await idbGetHandle();
+                let dir = await idbGetHandle(key);
                 // Verify/request permission on the stored handle
                 if (dir) {
                     const perm = await dir.queryPermission({ mode: 'readwrite' });
@@ -1355,22 +1408,36 @@
                         if (req !== 'granted') dir = null;
                     }
                 }
-                // First time (or permission lost): ask the user to pick the backups folder once
+                // First time (or permission lost): ask the user to pick the folder once
                 if (!dir) {
-                    dir = await window.showDirectoryPicker({ id: 'ncBackups', mode: 'readwrite' });
-                    await idbSetHandle(dir);
+                    const opts = { id: pickerId, mode: 'readwrite' };
+                    const near = startInKey ? await idbGetHandle(startInKey) : null;
+                    if (near) opts.startIn = near;
+                    dir = await window.showDirectoryPicker(opts);
+                    await idbSetHandle(dir, key);
                 }
                 const fileHandle = await dir.getFileHandle(filename, { create: true });
                 const writable = await fileHandle.createWritable();
                 await writable.write(blob);
                 await writable.close();
+                lastSaveFolderName = dir.name || '';
                 return 'folder';
             } catch (e) {
                 // User cancelled the picker, or a write error — fall back to normal download
-                if (e && e.name === 'AbortError') { downloadBlobFallback(filename, blob); return 'download'; }
                 downloadBlobFallback(filename, blob);
                 return 'download';
             }
+        }
+        async function saveToBackups(filename, blob) {
+            return saveToDir('backupDir', 'ncBackups', filename, blob);
+        }
+        // v27: S-140 PDF → folder na "schedule" (pipiliin minsan; nagsisimula malapit sa backups folder)
+        async function saveToSchedule(filename, blob) {
+            return saveToDir('scheduleDir', 'ncSchedule', filename, blob, 'backupDir');
+        }
+        async function changeScheduleFolder() {
+            await idbSetHandle(null, 'scheduleDir');
+            alert('Next time you export the S-140 or S-89 slips, the app will ask you to pick the folder again.\n\nPick: Coding\\new-cong-files\\schedule');
         }
 
         async function exportData() {
@@ -2196,7 +2263,7 @@
         }
         function normName(s) { return (s || '').toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim(); }
         function personName(p) { return p ? `${p.first} ${p.last}`.trim() : ''; }
-        function personLabel(p) { return p ? `${p.last}, ${p.first}` : ''; }
+        function personLabel(p) { return p ? `${p.first} ${p.last}`.trim() : ''; } // v21: first name basis
         function getPerson(id) { return people.find(p => p.id === id) || null; }
         function findPersonByName(name) {
             const n = normName(name);
@@ -2385,7 +2452,8 @@
             ranked.forEach((c, idx) => {
                 const star = !c.conflict && idx < 3 ? '★ ' : '';
                 const extra = c.notes.length ? ' · ' + c.notes.join(' · ') : '';
-                html += `<option value="${escHtml(c.p.id)}" ${c.p.id === currentId ? 'selected' : ''}>${star}${escHtml(personLabel(c.p))} — ${escHtml(c.info + extra)}</option>`;
+                // v20: (RP) = Regular Pioneer, para makita agad sa dropdown
+                html += `<option value="${escHtml(c.p.id)}" ${c.p.id === currentId ? 'selected' : ''}>${star}${escHtml(personLabel(c.p))}${c.p.pioneer ? ' (RP)' : ''} — ${escHtml(c.info + extra)}</option>`;
             });
             return html;
         }
@@ -2476,11 +2544,15 @@
             const last = (document.getElementById('newPersonLast')?.value || '').trim();
             const first = (document.getElementById('newPersonFirst')?.value || '').trim();
             const atas = document.getElementById('newPersonAtas')?.value || 'Publisher';
-            const gender = normGender(document.getElementById('newPersonGender')?.value || '');
-            if (!last || !first) { alert('Enter both the last name and the first name.'); return; }
+            let gender = normGender(document.getElementById('newPersonGender')?.value || '');
+            const pioneer = !!document.getElementById('newPersonPioneer')?.checked;
+            const notes = (document.getElementById('newPersonNotes')?.value || '').trim();
+            if (!last || !first) { alert('Enter both the first name and the last name.'); return; }
             if (people.some(p => normName(p.last) === normName(last) && normName(p.first) === normName(first))) { alert('This name is already in the roster.'); return; }
-            people.push({ id: `person-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, last, first, atas, pioneer: false, gender, notes: '', active: true });
+            if (!gender && (atas === 'Elder' || atas === 'MS')) gender = 'Brother';
+            people.push({ id: `person-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, last, first, atas, pioneer, gender, notes, active: true });
             syncBrothersFromPeople();
+            refreshBrotherCategories();
             saveData();
             renderStudentsView();
         }
@@ -2549,7 +2621,7 @@
 
                     const msg = `Masterlist: ${incoming.length} name(s)\n\n` +
                         `• New: ${toAdd}\n• To update (Role, Pioneer, Notes): ${toUpdate}\n` +
-                        (notInFile ? `• In the app but not in the file: ${notInFile} (will not be deleted)\n` : '') +
+                        (notInFile ? `• In the app but not in the file: ${notInFile} (you can choose to remove them next)\n` : '') +
                         (noGender ? `\n⚠ ${noGender} have no Brother/Sister in the file. They won't appear in the student lists until it is filled in (you can also do it in the Roster here).\n` : '') +
                         `\nBrother/Sister values you already set in the app will NOT be overwritten by blanks.\nContinue?`;
                     if (!confirm(msg)) return;
@@ -2565,11 +2637,25 @@
                             people.push({ id: `person-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, ...p, active: true });
                         }
                     });
+                    // v21: mga nasa app pero wala na sa Masterlist — puwedeng alisin (kasama ang pangalan nila sa mga susunod na bahagi)
+                    const gone = people.filter(p => !incomingKeys.has(keyOf(p)));
+                    let removedTxt = '';
+                    if (gone.length && confirm(`${gone.length} name(s) are in the app but NOT in this Masterlist:\n\n` +
+                        gone.map(p => `• ${personLabel(p)} (${p.atas})`).join('\n') +
+                        `\n\nRemove them from the roster?\n` +
+                        `Their names are cleared from upcoming Students-tab parts (from next week on) so you can pick someone else. ` +
+                        `This week and past weeks keep the name.\n\nCancel = keep them.`)) {
+                        const r = removePeopleFromRoster(gone.map(p => p.id));
+                        removedTxt = `\n\nRemoved ${r.removed} name(s) from the roster.` +
+                            (r.cleared.length ? `\nCleared from upcoming parts — pick a new name:\n` + r.cleared.map(c => `• ${c}`).join('\n') : '') +
+                            (r.brothers.length ? `\n\nStill in the Assignments grid (remove in 🎯 Manage Selection if needed): ${r.brothers.join(', ')}` : '');
+                    }
                     const sync = syncBrothersFromPeople();
                     refreshBrotherCategories();
                     saveData();
+                    saveMeetingEditorData();
                     render();
-                    alert(`Masterlist imported!\n\n${toAdd} new, ${toUpdate} updated.\nAssignments grid: ${sync.added} Elder/MS added, ${sync.updated} category update(s).`);
+                    alert(`Masterlist imported!\n\n${toAdd} new, ${toUpdate} updated. Roster now: ${people.length}.\nAssignments grid: ${sync.added} Elder/MS added, ${sync.updated} category update(s).` + removedTxt);
                 } catch (err) {
                     alert('Error importing the Masterlist: ' + err.message);
                 }
@@ -2691,14 +2777,18 @@
                     <input id="rosterSearch" type="text" placeholder="Search…" value="${escHtml(rosterFilter.search)}" oninput="updateRosterFilter('search', this.value)">
                     <label class="stu-check"><input type="checkbox" ${rosterFilter.missingGenderOnly ? 'checked' : ''} onchange="updateRosterFilter('missingGenderOnly', this.checked)"> Missing Brother/Sister only</label>
                 </div>
-                <table class="stu-table"><thead><tr><th>Last Name</th><th>First Name</th><th>Role</th><th>Brother/Sister</th><th>Active</th><th>Last part (as Student)</th><th>Last role</th><th></th></tr></thead><tbody>`;
+                <div class="stu-roster-hint">Edits here are saved in the app. The next Masterlist import overwrites Role, RP and Notes with the file's values, so update the Masterlist file too.</div>
+                <table class="stu-table"><thead><tr><th>First Name</th><th>Last Name</th><th>Role</th><th>RP</th><th>Brother/Sister</th><th>Active</th><th>Last part (as Student)</th><th>Last role</th><th></th></tr></thead><tbody>`;
             rows.forEach(p => {
                 const all = (hist[p.id] || []).filter(e => e.date <= today);
                 const ls = all.find(e => e.role === 'Estudyante');
                 const la = all[0];
                 const fmt = e => e ? `${escHtml(STUDENT_KINDS[e.kind]?.short || e.kind)} · ${shortDate(e.date)} (${weeksAgo(e.date, today)})` : '<span class="stu-muted">—</span>';
+                if (editingPersonId === p.id) { h += renderPersonEditRow(p); return; }
                 h += `<tr class="${p.active === false ? 'stu-inactive' : ''}">
-                    <td>${escHtml(p.last)}</td><td>${escHtml(p.first)}${p.pioneer ? ' <span class="stu-badge">RP</span>' : ''}</td><td>${escHtml(p.atas)}</td>
+                    <td>${escHtml(p.first)}${p.pioneer ? ' <span class="stu-badge">RP</span>' : ''}${p.notes ? `<div class="stu-note">${escHtml(p.notes)}</div>` : ''}</td><td>${escHtml(p.last)}</td>
+                    <td><select onchange="setPersonAtas('${p.id}', this.value)">${PERSON_ATAS.map(a => `<option ${a === p.atas ? 'selected' : ''}>${a}</option>`).join('')}</select></td>
+                    <td><input type="checkbox" title="Regular Pioneer" ${p.pioneer ? 'checked' : ''} onchange="setPersonPioneer('${p.id}', this.checked)"></td>
                     <td><select onchange="setPersonGender('${p.id}', this.value)" class="${p.gender ? '' : 'stu-missing'}">
                         <option value="" ${!p.gender ? 'selected' : ''}>—</option>
                         <option value="Brother" ${p.gender === 'Brother' ? 'selected' : ''}>Brother</option>
@@ -2706,13 +2796,15 @@
                     <td><input type="checkbox" ${p.active !== false ? 'checked' : ''} onchange="setPersonActive('${p.id}', this.checked)"></td>
                     <td>${fmt(ls)}</td>
                     <td>${la ? `${escHtml(roleLabel(la.role))} · ${escHtml(STUDENT_KINDS[la.kind]?.short || la.kind)}` : '<span class="stu-muted">—</span>'}</td>
-                    <td><button class="stu-x" title="Remove from roster" onclick="removePerson('${p.id}')">🗑</button></td></tr>`;
+                    <td class="stu-actions"><button class="stu-x" title="Edit name / notes" onclick="startPersonEdit('${p.id}')">✏️</button><button class="stu-x" title="Remove from roster" onclick="removePerson('${p.id}')">🗑</button></td></tr>`;
             });
             h += `</tbody></table>
                 <div class="stu-add">
-                    <input id="newPersonLast" placeholder="Last name"><input id="newPersonFirst" placeholder="First name">
+                    <input id="newPersonFirst" placeholder="First name"><input id="newPersonLast" placeholder="Last name">
                     <select id="newPersonAtas">${PERSON_ATAS.map(a => `<option ${a === 'Publisher' ? 'selected' : ''}>${a}</option>`).join('')}</select>
                     <select id="newPersonGender"><option value="">Brother/Sister</option><option>Brother</option><option>Sister</option></select>
+                    <label class="stu-check"><input type="checkbox" id="newPersonPioneer"> RP</label>
+                    <input id="newPersonNotes" placeholder="Notes (optional)">
                     <button class="btn-secondary" onclick="addPersonManually()">+ Add</button>
                 </div></div>`;
             return h;
@@ -2728,7 +2820,7 @@
         const ELDER_ONLY_TYPES = ['OCLM Chairman', 'CBS'];
         const TG_MONTHS = ['', 'ENERO', 'PEBRERO', 'MARSO', 'ABRIL', 'MAYO', 'HUNYO', 'HULYO', 'AGOSTO', 'SETYEMBRE', 'OKTUBRE', 'NOBYEMBRE', 'DISYEMBRE'];
         const MEETING_MAX_MIN = 105; // 1 oras at 45 minuto, kasama ang mga awit at panalangin
-        const S140_GRID = [648, 4500, 2000, 3868]; // oras | bahagi | label | pangalan (kabuuang 11016)
+        const S140_GRID = [648, 5068, 1800, 3500]; // v26: mas malapad ang pamagat para hindi na tumiklop ang "Pag-aaral ng Kongregasyon sa Bibliya" // oras | bahagi | label | pangalan (kabuuang 11016)
         let meetingSettings = { congName: '', startTime: '18:45', openingMin: 5, middleMin: 4, closingMin: 5, counselMin: 1, msMayChair: false, anchorClosing: true, msTalkMax: 2 };
         let msPanelOpen = false;
 
@@ -2814,7 +2906,7 @@
             const d = new Date(thursday + 'T12:00:00+08:00');
             const model = {
                 thursday,
-                dateLabel: `${TG_MONTHS[d.getMonth() + 1]} ${d.getDate()}`,
+                dateLabel: s140WeekLabel(thursday), // v26: "NOBYEMBRE 2-8" gaya ng workbook
                 bible: (md.bibleReading || '').toUpperCase(),
                 type: getWeekType(thursday) || 'normal',
                 noMeeting: isNoMeetingWeek(thursday),
@@ -2823,7 +2915,7 @@
                 chairman: getAssignedBrother(thursday, 'OCLM Chairman'),
                 rows: [], warnings: [],
                 start: parseStartMin(s.startTime), end: null,
-                ministryMin: 0, livingMin: 0, missingNames: 0
+                ministryMin: 0, livingMin: 0, missingNames: 0, tbaLocalNeeds: 0
             };
             if (model.noMeeting) { model.end = model.start; return model; }
 
@@ -2879,7 +2971,10 @@
                     model.warnings.push(`#${num} Local Needs: ${p.bro.name} is ${getBrotherCategory(p.bro)} (S-38: elder only)`);
                 }
                 const txt = titleText(p.title);
-                push('living', { num, text: txt && txt !== 'Pamumuhay' ? txt : '[Pamagat]', dispMin: m, names: p.name }, m);
+                // v25: Lokal na Pangangailangan na wala pang gaganap → "TBA" (pinag-uusapan pa ng mga elder)
+                const tba = isLocalNeedsTitle(p.title) && !String(p.name || '').trim();
+                if (tba) model.tbaLocalNeeds++;
+                push('living', { num, text: txt && txt !== 'Pamumuhay' ? txt : '[Pamagat]', dispMin: m, names: tba ? 'TBA' : p.name }, m);
                 num++;
             });
             model.livingMin = t - lStart;
@@ -2997,7 +3092,7 @@
             pr += `<w:vAlign w:val="${o.valign || 'center'}"/>`;
             return `<w:tc><w:tcPr>${pr}</w:tcPr>${content || wPara('')}</w:tc>`;
         }
-        function wRow(cells) { return `<w:tr><w:trPr><w:trHeight w:val="288"/></w:trPr>${cells}</w:tr>`; }
+        function wRow(cells) { return `<w:tr><w:trPr><w:trHeight w:val="${S140_SP.row}"/></w:trPr>${cells}</w:tr>`; }
         function wTable(grid, rows, headerBorder) {
             const borders = headerBorder
                 ? '<w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="thinThickSmallGap" w:sz="18" w:space="0" w:color="A6A6A6"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders>'
@@ -3037,7 +3132,7 @@
         function s140SectionTable(title, fill, rows) {
             const [g0, g1, g2, g3] = S140_GRID;
             const header = wRow(
-                wCell(g0 + g1, wPara(wRun(title, { b: 1, color: 'FFFFFF', sz: 20 }), { spacing: '<w:spacing w:before="20" w:after="20"/>' }), { span: 2, fill }) +
+                wCell(g0 + g1, wPara(wRun(title, { b: 1, color: 'FFFFFF', sz: 20 }), { spacing: `<w:spacing w:before="${S140_SP.hdrPad}" w:after="${S140_SP.hdrPad}"/>` }), { span: 2, fill }) +
                 wCell(g2 + g3, wPara(''), { span: 2 })
             );
             return wTable(S140_GRID, header + rows.map(s140PartRow).join(''));
@@ -3058,37 +3153,93 @@
                 wCell(g3, wPara(wRun(m.chairman || '')))
             ));
             const sec = name => m.rows.filter(r => r.sec === name);
-            return top + wSpacer(12) +
-                wTable(S140_GRID, sec('open').map(s140PartRow).join('')) + wSpacer(12) +
-                s140SectionTable('KAYAMANAN MULA SA SALITA NG DIYOS', '575A5D', sec('kayaman')) + wSpacer(12) +
-                s140SectionTable('MAGING MAHUSAY SA MINISTERYO', 'BE8900', sec('ministry')) + wSpacer(12) +
+            const g = S140_SP.sec;
+            return top + wSpacer(g) +
+                wTable(S140_GRID, sec('open').map(s140PartRow).join('')) + wSpacer(g) +
+                s140SectionTable('KAYAMANAN MULA SA SALITA NG DIYOS', '575A5D', sec('kayaman')) + wSpacer(g) +
+                s140SectionTable('MAGING MAHUSAY SA MINISTERYO', 'BE8900', sec('ministry')) + wSpacer(g) +
                 s140SectionTable('PAMUMUHAY BILANG KRISTIYANO', '7E0024', sec('living'));
         }
-        function buildS140BodyXml(thursdays) {
+        function buildS140BodyXml(thursdays, spForce) {
             let xml = '';
-            thursdays.forEach((thu, i) => {
-                if (i % 2 === 0) {
-                    if (i > 0) xml += wPageBreak();
-                    xml += s140PageHeader() + wSpacer(12);
-                } else {
-                    xml += wSpacer(36);
-                }
-                xml += s140WeekXml(buildWeekModel(thu));
-            });
+            const models = thursdays.map(buildWeekModel);
+            // v26: iisang luwag para sa buong buwan (pare-pareho ang itsura) — ang pinakamaluwag na kasya
+            // pa rin ang 2 linggo sa bawat pahina
+            const pages = [];
+            for (let i = 0; i < models.length; i += 2) pages.push(models.slice(i, i + 2));
+            const fits = pages.map(s140FitSpacing);
+            S140_SP = spForce ? { ...spForce } : fits.reduce((a, b) => (b.row < a.row ? b : a), fits[0] || { ...S140_SP_MIN });
+            for (let i = 0; i < models.length; i += 2) {
+                const pageModels = models.slice(i, i + 2);
+                if (i > 0) xml += wPageBreak();
+                xml += s140PageHeader() + wSpacer(S140_SP.sec);
+                pageModels.forEach((m, k) => {
+                    if (k > 0) xml += wSpacer(S140_SP.week);
+                    xml += s140WeekXml(m);
+                });
+            }
+            S140_SP = { ...S140_SP_MIN };
             return xml + wSpacer(12);
         }
-        async function buildS140Zip(year, month) {
-            if (typeof JSZip === 'undefined') throw new Error('The ZIP library did not load. Please refresh the page.');
-            if (typeof S140_BASE_B64 === 'undefined') throw new Error('The S-140 template (lib/s140-base.js) did not load.');
-            const thursdays = getThursdaysForMonthByWeekStart(year, month);
-            const zip = await JSZip.loadAsync(S140_BASE_B64, { base64: true });
-            const docXml = await zip.file('word/document.xml').async('string');
-            const a = docXml.indexOf('<w:body>') + '<w:body>'.length;
-            const b = docXml.lastIndexOf('<w:sectPr');
-            zip.file('word/document.xml', docXml.slice(0, a) + buildS140BodyXml(thursdays) + docXml.slice(b));
-            return { zip, thursdays };
+
+        // v26: linggo (Lunes–Linggo) sa anyo ng workbook: "NOBYEMBRE 2-8", "NOBYEMBRE 30–DISYEMBRE 6",
+        //      "DISYEMBRE 28, 2026–ENERO 3, 2027"
+        function s140WeekLabel(thursday) {
+            const mon = new Date(new Date(thursday + 'T12:00:00+08:00').getTime() - 3 * 86400000);
+            const sun = new Date(mon.getTime() + 6 * 86400000);
+            const M = d => TG_MONTHS[d.getMonth() + 1];
+            if (mon.getFullYear() !== sun.getFullYear())
+                return `${M(mon)} ${mon.getDate()}, ${mon.getFullYear()}\u2013${M(sun)} ${sun.getDate()}, ${sun.getFullYear()}`;
+            if (mon.getMonth() !== sun.getMonth()) return `${M(mon)} ${mon.getDate()}\u2013${M(sun)} ${sun.getDate()}`;
+            return `${M(mon)} ${mon.getDate()}-${sun.getDate()}`;
         }
-        async function exportS140Word() {
+
+        // ==================== v26: S-140 spacing (luwag) ====================
+        // MIN = dating sukat (masikip pero laging kasya). MAX = pinakamaluwag. Pinipili ang pinakamalapit sa MAX na kasya.
+        const S140_SP_MIN = { row: 288, sec: 12, week: 36, hdrPad: 20 };
+        const S140_SP_MAX = { row: 380, sec: 22, week: 60, hdrPad: 60 };
+        // Letter 15840 − itaas 432 − footer ~964 = 14444 twips. Ang tantiya sa ibaba ay ~700–1000 mas mataas kaysa
+        // sa sukat gamit ang tunay na font, kaya 14650 dito ≈ 13.7–13.9k talaga (may ~500 palugit).
+        const S140_PAGE_BUDGET = 14650;
+        let S140_SP = { ...S140_SP_MIN };
+        function s140Lerp(s) {
+            const o = {};
+            Object.keys(S140_SP_MIN).forEach(k => { o[k] = Math.round(S140_SP_MIN[k] + (S140_SP_MAX[k] - S140_SP_MIN[k]) * s); });
+            return o;
+        }
+        function s140LineH(sz) { return sz / 2 * 1.22 * 20; }
+        function s140TextLines(text, sz, bold, width) {
+            const w = String(text || '').length * (sz / 2) * 20 * 0.47 * (bold ? 1.08 : 1);
+            return Math.max(1, Math.ceil(w / Math.max(200, width - 216)));
+        }
+        function s140RowH(r, sp) {
+            const [g0, g1, g2, g3] = S140_GRID;
+            const title = `${r.num ? r.num + '. ' : ''}${r.text || ''}${r.dispMin ? ` (${r.dispMin} min.)` : ''}`;
+            const tW = r.label ? g1 : ('names' in r ? g1 + g2 : g1 + g2 + g3);
+            let lines = s140TextLines(title, 22, false, tW);
+            if ('names' in r) lines = Math.max(lines, s140TextLines(r.names, r.pair ? 20 : 22, false, g3));
+            return Math.max(sp.row, lines * s140LineH(22));
+        }
+        function s140WeekHeight(m, sp) {
+            const top = Math.max(sp.row, s140LineH(22));
+            if (m.noMeeting) return top + s140LineH(12) + Math.max(sp.row, 240 + s140LineH(20));
+            const hdr = Math.max(sp.row, 2 * sp.hdrPad + s140LineH(20));
+            const rows = m.rows.reduce((a, r) => a + s140RowH(r, sp), 0);
+            return top + 4 * s140LineH(sp.sec) + 3 * hdr + rows;
+        }
+        function s140PageHeight(models, sp) {
+            const header = Math.max(sp.row, s140LineH(36) + 60);
+            return header + s140LineH(sp.sec) + models.reduce((a, m) => a + s140WeekHeight(m, sp), 0) +
+                (models.length > 1 ? s140LineH(sp.week) : 0) + s140LineH(12);
+        }
+        function s140FitSpacing(models) {
+            for (let k = 20; k > 0; k--) { const s = k / 20;
+                const sp = s140Lerp(s);
+                if (s140PageHeight(models, sp) <= S140_PAGE_BUDGET) return sp;
+            }
+            return { ...S140_SP_MIN };
+        }
+        async function exportS140Pdf() {
             loadMeetingEditorData();
             const [year, month] = document.getElementById('monthSelect').value.split('-').map(Number);
             const thursdays = getThursdaysForMonthByWeekStart(year, month);
@@ -3103,12 +3254,14 @@
                 if (!confirm(`${issues.length} reminder(s) before exporting:\n\n• ${list}\n\nExport anyway?`)) return;
             }
             try {
-                const { zip } = await buildS140Zip(year, month);
-                const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+                const bytes = await buildS140Pdf(year, month);
+                const blob = new Blob([bytes], { type: 'application/pdf' });
                 const monthName = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][month];
-                const name = `S-140 ${monthName} ${year}.docx`;
-                const where = await saveToBackups(name, blob);
-                alert(where === 'folder' ? `Saved ${name} to your backups folder!` : `Downloaded ${name}.`);
+                const name = `S-140 ${monthName} ${year}.pdf`;
+                const where = await saveToSchedule(name, blob);
+                const tbaWeeks = thursdays.map(buildWeekModel).filter(m => !m.noMeeting && m.tbaLocalNeeds).map(m => shortDate(m.thursday));
+                alert((where === 'folder' ? `Saved ${name} to the "${lastSaveFolderName || 'schedule'}" folder!` : `Downloaded ${name} (it went to your Downloads folder).`) +
+                    (tbaWeeks.length ? `\n\nLocal Needs shown as "TBA" (no one assigned yet): ${tbaWeeks.join(', ')}.\nExport again once the elders decide.` : ''));
             } catch (e) {
                 alert('Error exporting the S-140: ' + e.message);
             }
@@ -3458,7 +3611,7 @@
                 const p = getPerson(pr.personId);
                 h += `<div class="sap-row"><span class="sap-title">${escHtml(pr.title)}</span>
                     <span class="sap-role ${pr.role === 'assistant' ? 'sap-asst' : ''}">${pr.role === 'assistant' ? 'Assistant' : 'Student'}</span>
-                    <span class="sap-name">${escHtml(personLabel(p))}${pr.replaced ? `<span class="sap-was">was: ${escHtml(pr.replaced)}</span>` : ''}</span><span class="sap-info">${escHtml(pr.info)}</span>
+                    <span class="sap-name">${escHtml(personLabel(p))}${p && p.pioneer ? ' <span class="stu-badge">RP</span>' : ''}${pr.replaced ? `<span class="sap-was">was: ${escHtml(pr.replaced)}</span>` : ''}</span><span class="sap-info">${escHtml(pr.info)}</span>
                     <button class="stu-x" title="Remove from this preview" onclick="removeStudentAutoItem(${idx})">✕</button></div>`;
             });
             c.innerHTML = h;
@@ -4040,8 +4193,9 @@
             try {
                 const bytes = await buildS89Pdf(slips);
                 const name = `S-89 ${label}.pdf`;
-                const where = await saveToBackups(name, new Blob([bytes], { type: 'application/pdf' }));
-                alert(where === 'folder' ? `Saved ${name} to your backups folder!` : `Downloaded ${name}.`);
+                // v28: kasama ng S-140 sa "schedule" folder
+                const where = await saveToSchedule(name, new Blob([bytes], { type: 'application/pdf' }));
+                alert(where === 'folder' ? `Saved ${name} to the "${lastSaveFolderName || 'schedule'}" folder!` : `Downloaded ${name} (it went to your Downloads folder).`);
             } catch (e) {
                 alert('Error making the S-89 slips: ' + e.message);
             }
@@ -4606,6 +4760,414 @@ function findMonthRepeats() {
         function showSpacingBanner() {
             localStorage.removeItem('nc_spacingDismissed');
             renderGrid();
+        }
+
+
+        // ==================== v21: remove people who left (from the Masterlist import) ====================
+        // Aalisin sa roster; buburahin ang pangalan nila sa mga bahagi sa Students tab mula sa susunod na linggo.
+        // Ang kasalukuyan at mga lumipas na linggo ay hindi ginagalaw (kasaysayan).
+        function removePeopleFromRoster(ids) {
+            const set = new Set(ids);
+            const gonePeople = people.filter(p => set.has(p.id));
+            const thisThu = thursdayOfWeek(manilaTodayISO());
+            const isGone = (id, name) => (id && set.has(id)) || (!id && gonePeople.some(p => normName(personName(p)) === normName(name || '') && normName(name || '')));
+            const cleared = [];
+            Object.keys(meetingEditorData).forEach(key => {
+                const m = key.match(/^week_(\d{4}-\d{2}-\d{2})$/);
+                const md = meetingEditorData[key];
+                if (!md || typeof md !== 'object') return;
+                const upcoming = m && m[1] > thisThu;
+                if (isGone(md.bibleReadingId, md.bibleReadingName)) {
+                    if (upcoming) { cleared.push(`${shortDate(m[1])} Bible Reading (${md.bibleReadingName})`); md.bibleReadingName = ''; }
+                    md.bibleReadingId = '';
+                }
+                (md.ministryParts || []).forEach((pt, i) => {
+                    if (isGone(pt.studentId, pt.name)) {
+                        if (upcoming) { cleared.push(`${shortDate(m[1])} ${pt.title || 'student part'} (${pt.name})`); pt.name = ''; }
+                        pt.studentId = '';
+                    }
+                    if (isGone(pt.assistantId, pt.assistant)) {
+                        if (upcoming) { cleared.push(`${shortDate(m[1])} ${pt.title || 'student part'} — assistant (${pt.assistant})`); pt.assistant = ''; }
+                        pt.assistantId = '';
+                    }
+                });
+            });
+            const bros = gonePeople.filter(p => brothers.some(b => normalizeBrotherName(b.name) === normalizeBrotherName(personName(p)))).map(personLabel);
+            people = people.filter(p => !set.has(p.id));
+            return { removed: gonePeople.length, cleared, brothers: bros };
+        }
+
+
+        // ==================== v22: Roster editing (RP, Role, name, notes) ====================
+        let editingPersonId = null;
+        function setPersonPioneer(id, checked) {
+            const p = getPerson(id); if (!p) return;
+            p.pioneer = !!checked;
+            saveData();
+            renderStudentsView();
+        }
+        function setPersonAtas(id, value) {
+            const p = getPerson(id); if (!p || !PERSON_ATAS.includes(value)) return;
+            p.atas = value;
+            if ((value === 'Elder' || value === 'MS') && !p.gender) p.gender = 'Brother';
+            syncBrothersFromPeople();
+            refreshBrotherCategories();
+            saveData();
+            render();
+        }
+        function startPersonEdit(id) { editingPersonId = id; renderStudentsView(); }
+        function cancelPersonEdit() { editingPersonId = null; renderStudentsView(); }
+        function renderPersonEditRow(p) {
+            return `<tr class="stu-editing"><td colspan="9"><div class="stu-edit">
+                <label>First name <input id="editPersonFirst" value="${escHtml(p.first)}"></label>
+                <label>Last name <input id="editPersonLast" value="${escHtml(p.last)}"></label>
+                <label>Notes <input id="editPersonNotes" value="${escHtml(p.notes || '')}" placeholder="e.g. Commuter, Infirmed"></label>
+                <button class="btn-primary text-sm" onclick="savePersonEdit('${p.id}')">💾 Save</button>
+                <button class="btn-secondary text-sm" onclick="cancelPersonEdit()">Cancel</button>
+                <div class="stu-note">Role, RP, Brother/Sister and Active can be changed directly in the row. A new name also updates this person's names in the schedule${p.atas === 'Elder' || p.atas === 'MS' ? ' and in the Assignments grid' : ''}.</div>
+            </div></td></tr>`;
+        }
+        function savePersonEdit(id) {
+            const p = getPerson(id); if (!p) return;
+            const first = (document.getElementById('editPersonFirst')?.value || '').trim();
+            const last = (document.getElementById('editPersonLast')?.value || '').trim();
+            const notes = (document.getElementById('editPersonNotes')?.value || '').trim();
+            if (!first || !last) { alert('Enter both the first name and the last name.'); return; }
+            if (people.some(x => x.id !== id && normName(x.first) === normName(first) && normName(x.last) === normName(last))) { alert('Another person in the roster already has this name.'); return; }
+            const oldName = personName(p);
+            const renamed = normName(first) !== normName(p.first) || normName(last) !== normName(p.last);
+            p.notes = notes;
+            let parts = 0, grid = '';
+            if (renamed) ({ parts, grid } = applyPersonRename(p, first, last));
+            editingPersonId = null;
+            syncBrothersFromPeople();
+            saveData();
+            render();
+            if (renamed) alert(`Renamed ${oldName} → ${personName(p)}.` +
+                (parts ? `\n${parts} schedule name(s) updated.` : '') + (grid ? `\nAssignments grid updated too.` : '') +
+                `\n\nUpdate the Masterlist file as well — otherwise the next import will see "${personName(p)}" as missing and "${oldName}" as new.` +
+                `\nRe-export the S-140 / S-89 if this name was already printed.`);
+        }
+        // v23: pinagsamang pagpapalit ng pangalan (Roster ✏️ at Manage Selection ✏️)
+        function applyPersonRename(p, first, last) {
+            const id = p.id;
+            const oldName = personName(p);
+            p.first = first; p.last = last;
+            let parts = 0, grid = '';
+            {
+                const newName = personName(p);
+                // pangalan sa Students tab / S-140 (naka-link sa id; o sa lumang pangalan kung walang id)
+                const same = (pid, nm) => pid === id || (!pid && normName(nm) === normName(oldName));
+                Object.values(meetingEditorData).forEach(md => {
+                    if (!md || typeof md !== 'object') return;
+                    if (same(md.bibleReadingId, md.bibleReadingName) && (md.bibleReadingName || md.bibleReadingId)) { md.bibleReadingName = newName; md.bibleReadingId = id; parts++; }
+                    (md.ministryParts || []).forEach(pt => {
+                        if (same(pt.studentId, pt.name) && (pt.name || pt.studentId)) { pt.name = newName; pt.studentId = id; parts++; }
+                        if (same(pt.assistantId, pt.assistant) && (pt.assistant || pt.assistantId)) { pt.assistant = newName; pt.assistantId = id; parts++; }
+                    });
+                });
+                // Assignments grid: palitan din ang pangalan ng kaparehong brother para manatiling naka-link
+                const b = brothers.find(x => normalizeBrotherName(x.name) === normalizeBrotherName(oldName));
+                if (b && !brothers.some(x => x !== b && normalizeBrotherName(x.name) === normalizeBrotherName(newName))) { b.name = newName; grid = newName; }
+                saveMeetingEditorData();
+            }
+            return { parts, grid };
+        }
+
+
+        // ==================== v23: rename a brother in 🎯 Manage Selection ====================
+        let editingBrotherId = null;
+        function findRosterPersonForBrother(b) {
+            const n = normalizeBrotherName(b && b.name);
+            return n ? people.find(p => normalizeBrotherName(personName(p)) === n) || null : null;
+        }
+        function startBrotherRename(id) { editingBrotherId = id; renderAssignmentSelectionModal(); setTimeout(() => { const el = document.getElementById('editBrotherName'); if (el && el.focus) { el.focus(); el.select && el.select(); } }, 0); }
+        function cancelBrotherRename() { editingBrotherId = null; renderAssignmentSelectionModal(); }
+        function saveBrotherRename(id) {
+            const b = brothers.find(x => x.id === id); if (!b) return;
+            const newName = (document.getElementById('editBrotherName')?.value || '').trim().replace(/\s+/g, ' ');
+            if (!newName) { alert('Enter a name.'); return; }
+            if (normalizeBrotherName(newName) === normalizeBrotherName(b.name)) { cancelBrotherRename(); return; }
+            if (brothers.some(x => x.id !== id && normalizeBrotherName(x.name) === normalizeBrotherName(newName))) { alert('Another brother in the Assignments grid already has this name.'); return; }
+            const oldName = b.name;
+            const linked = findRosterPersonForBrother(b);
+            const target = people.find(p => normalizeBrotherName(personName(p)) === normalizeBrotherName(newName));
+            let msg;
+            if (linked) {
+                // naka-link sa Roster: palitan din doon para hindi madoble sa susunod na sync
+                const words = newName.split(' ');
+                const keepLast = normalizeBrotherName(newName).endsWith(' ' + normalizeBrotherName(linked.last));
+                const last = keepLast ? newName.slice(newName.length - linked.last.length) : words[words.length - 1];
+                const first = newName.slice(0, newName.length - last.length).trim();
+                if (!first) { alert('Enter both a first name and a last name.'); return; }
+                if (target && target.id !== linked.id) { alert(`"${newName}" is already someone else in the Roster.`); return; }
+                if (!confirm(`Rename ${oldName} → ${newName}?\n\nHe is also in the Students-tab Roster, so it changes there too:\nFirst name: ${first}\nLast name: ${last}\n\nHis assignments stay. Update the Masterlist file as well.`)) return;
+                const r = applyPersonRename(linked, first, last);
+                if (!r.grid) b.name = newName;
+                msg = `Renamed ${oldName} → ${newName} in the Assignments grid and the Roster.` + (r.parts ? `\n${r.parts} schedule name(s) updated.` : '') +
+                    `\n\nUpdate the Masterlist file too, or the next import will treat him as a new person.`;
+            } else {
+                b.name = newName;
+                msg = `Renamed ${oldName} → ${newName}. His assignments stay.` +
+                    (target ? `\n\n✓ Now matches ${personLabel(target)} in the Roster — his Students-tab parts are counted for spacing and fairness.`
+                            : `\n\n⚠ Still no one in the Roster with this name.`);
+            }
+            editingBrotherId = null;
+            syncBrothersFromPeople();
+            refreshBrotherCategories();
+            saveData();
+            render();
+            renderAssignmentSelectionModal();
+            alert(msg + `\nRe-export the S-140 if this name was already printed.`);
+        }
+
+
+        // ==================== v27: S-140 PDF (same layout as the Word S-140) ====================
+        // Ginagawa muna ang parehong Word XML (iisang pinagmumulan ng layout), saka ito iginuguhit bilang PDF.
+        // Mga font: Carlito (kapareho ng sukat ng Calibri) at Caladea Bold (kapareho ng Cambria) — naka-vendor sa lib/.
+        const S140_PDF = { pageW: 612, pageH: 792, top: 21.6, marginL: 36, bodyBottom: 743.78, cellPad: 5.4, footerBase: 38.69 };
+        const S140_PDF_LIBS = ['lib/fontkit.umd.min.js', 'lib/s140-fonts.js'];
+        function loadScriptOnce(src) {
+            return new Promise((resolve, reject) => {
+                const s = document.createElement('script');
+                s.src = src;
+                s.onload = () => resolve();
+                s.onerror = () => reject(new Error('Could not load ' + src + '. Please refresh the page.'));
+                document.head.appendChild(s);
+            });
+        }
+        async function ensureS140PdfLibs() {
+            if (typeof PDFLib === 'undefined') throw new Error('The PDF library (lib/pdf-lib.min.js) did not load. Please refresh the page.');
+            if (typeof fontkit === 'undefined') await loadScriptOnce(S140_PDF_LIBS[0]);
+            if (typeof S140_FONT_REG === 'undefined') await loadScriptOnce(S140_PDF_LIBS[1]);
+        }
+        function s140XmlUnesc(s) { return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&'); }
+        // Maliit na parser para sa XML na ginawa mismo ng app (wTable/wRow/wCell/wPara/wRun/wSpacer/wPageBreak)
+        function s140ParseBody(xml) {
+            const attr = (a, n) => { const m = a.match(new RegExp('w:' + n + '="([^"]*)"')); return m ? m[1] : null; };
+            const body = [];
+            let tbl = null, tr = null, tc = null, p = null, r = null;
+            let inPPr = false, inTcBorders = false, inTblBorders = false, inTcPr = false, inT = false;
+            const re = /<(\/?)w:(\w+)([^>]*?)(\/?)>|([^<]+)/g;
+            let m;
+            while ((m = re.exec(xml))) {
+                if (m[5] !== undefined) { if (inT && r) r.text += s140XmlUnesc(m[5]); continue; }
+                const close = m[1] === '/', tag = m[2], a = m[3] || '', self = m[4] === '/';
+                if (close) {
+                    if (tag === 'tbl') { body.push(tbl); tbl = null; }
+                    else if (tag === 'tr') { tbl.rows.push(tr); tr = null; }
+                    else if (tag === 'tc') { tr.cells.push(tc); tc = null; }
+                    else if (tag === 'p') { (tc ? tc.paras : body).push(p); p = null; }
+                    else if (tag === 'r') { if (p && r) p.runs.push(r); r = null; }
+                    else if (tag === 'pPr') inPPr = false;
+                    else if (tag === 't') inT = false;
+                    else if (tag === 'tcBorders') inTcBorders = false;
+                    else if (tag === 'tblBorders') inTblBorders = false;
+                    else if (tag === 'tcPr') inTcPr = false;
+                    continue;
+                }
+                switch (tag) {
+                    case 'tbl': tbl = { kind: 'tbl', grid: [], rows: [] }; break;
+                    case 'tblBorders': inTblBorders = !self; break;
+                    case 'gridCol': if (tbl) tbl.grid.push(+attr(a, 'w')); break;
+                    case 'tr': tr = { minH: 0, cells: [] }; break;
+                    case 'trHeight': if (tr) tr.minH = +attr(a, 'val'); break;
+                    case 'tc': tc = { span: 1, fill: null, bottom: null, valign: 'top', paras: [] }; break;
+                    case 'tcPr': inTcPr = !self; break;
+                    case 'gridSpan': if (tc) tc.span = +attr(a, 'val'); break;
+                    case 'tcBorders': inTcBorders = !self; break;
+                    case 'bottom': {
+                        const v = attr(a, 'val');
+                        if (v && v !== 'nil' && inTcBorders && tc) tc.bottom = { val: v, sz: +(attr(a, 'sz') || 4), color: attr(a, 'color') || '000000' };
+                        break;
+                    }
+                    case 'shd': if (tc && inTcPr) tc.fill = attr(a, 'fill'); break;
+                    case 'vAlign': if (tc) tc.valign = attr(a, 'val') || 'top'; break;
+                    case 'p': p = { kind: 'p', runs: [], before: 0, after: tc ? 0 : 200, line: tc ? 240 : 276, jc: 'left', markSz: 22, pageBreak: false }; break;
+                    case 'pPr': inPPr = !self; break;
+                    case 'spacing': if (p) {
+                        const bf = attr(a, 'before'), af = attr(a, 'after'), ln = attr(a, 'line');
+                        if (bf !== null) p.before = +bf; if (af !== null) p.after = +af; if (ln !== null) p.line = +ln;
+                    } break;
+                    case 'jc': if (p) p.jc = attr(a, 'val') || 'left'; break;
+                    case 'sz': { const v = +attr(a, 'val'); if (r) r.sz = v; else if (p && inPPr) p.markSz = v; break; }
+                    case 'b': if (r) r.b = true; break;
+                    case 'color': if (r) r.color = attr(a, 'val'); break;
+                    case 'rFonts': if (r && /major/.test(a)) r.major = true; break;
+                    case 'r': r = { text: '', sz: 22, b: false, color: null, major: false }; break;
+                    case 't': inT = !self; break;
+                    case 'br': if (p && attr(a, 'type') === 'page') p.pageBreak = true; break;
+                }
+            }
+            return body;
+        }
+        function s140Rgb(hex) {
+            const n = parseInt(hex || '000000', 16);
+            return PDFLib.rgb(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
+        }
+        // Hatiin ang talata sa mga linya ayon sa lapad (pt)
+        function s140LayoutPara(F, p, widthPt) {
+            const toks = [];
+            p.runs.forEach(r => {
+                const size = r.sz / 2, font = r.major ? F.title : (r.b ? F.bold : F.reg);
+                const lh = size * (r.major ? 1.15 : 1.222), asc = size * (r.major ? 0.90 : 0.953);
+                r.text.split(/(\s+)/).forEach(w => {
+                    if (!w) return;
+                    const ws = /^\s+$/.test(w);
+                    const width = ws ? [...w].reduce((s, ch) => s + (ch === '\u2002' ? size * 0.5 : font.widthOfTextAtSize(' ', size)), 0)
+                        : font.widthOfTextAtSize(w, size);
+                    toks.push({ w, ws, width, size, font, color: r.color, lh, asc });
+                });
+            });
+            // v29: maayos na paghahati ng mahabang linya —
+            // (a) laging magkasama ang "(10 min.)" at ang salitang nauuna rito (hal. "Nangyari (10 min.)"), kaya hindi "min.)" lang ang maiiwan;
+            // (b) kapag 2+ linya, pantay-pantay ang haba ng mga linya (parehong bilang ng linya, kaya hindi nagbabago ang taas/espasyo).
+            const nextWord = i => { for (let k = i + 1; k < toks.length; k++) if (!toks[k].ws) return toks[k].w; return ''; };
+            toks.forEach((t, i) => { if (t.ws) { const nw = nextWord(i); t.glue = /^\(\d+$/.test(nw) || /^min\.\)$/.test(nw); } });
+            const units = [];
+            let u = null, gap = [];
+            toks.forEach(t => {
+                if (t.ws && !t.glue) { if (u) { units.push(u); u = null; } gap.push(t); return; }
+                if (!u) { u = { toks: [], width: 0, gap }; gap = []; }
+                u.toks.push(t); u.width += t.width;
+            });
+            if (u) units.push(u);
+            const wrap = W => {
+                const out = [];
+                let cur = null;
+                units.forEach(un => {
+                    const gw = un.gap.reduce((s, g) => s + g.width, 0);
+                    if (cur && cur.width + gw + un.width > W + 0.01) { out.push(cur); cur = null; }
+                    if (!cur) cur = { toks: [...un.toks], width: un.width };
+                    else { cur.toks.push(...un.gap, ...un.toks); cur.width += gw + un.width; }
+                });
+                if (cur) out.push(cur);
+                return out;
+            };
+            let lines = wrap(widthPt);
+            if (lines.length > 1) {
+                const k = lines.length;
+                let lo = Math.max(0, ...units.map(x => x.width)), hi = widthPt;
+                for (let it = 0; it < 24 && hi - lo > 0.25; it++) {
+                    const mid = (lo + hi) / 2;
+                    if (wrap(mid).length <= k) hi = mid; else lo = mid;
+                }
+                const bal = wrap(hi);
+                if (bal.length === k) lines = bal;
+            }
+            if (!lines.length) lines = [{ toks: [], width: 0 }];
+            const mark = p.markSz / 2, factor = (p.line || 240) / 240;
+            lines.forEach(l => {
+                l.h = (l.toks.length ? Math.max(...l.toks.map(t => t.lh)) : mark * 1.222) * factor;
+                l.asc = l.toks.length ? Math.max(...l.toks.map(t => t.asc)) : mark * 0.953;
+            });
+            return { lines, h: p.before / 20 + lines.reduce((s, l) => s + l.h, 0) + p.after / 20 };
+        }
+        function s140DrawPara(page, lay, p, x, w, top) {
+            let y = top + p.before / 20;
+            lay.lines.forEach(l => {
+                let cx = p.jc === 'right' ? x + w - S140_PDF.cellPad - l.width : p.jc === 'center' ? x + (w - l.width) / 2 : x + S140_PDF.cellPad;
+                const base = S140_PDF.pageH - (y + l.asc);
+                // pagsamahin ang magkakasunod na salita (kasama ang espasyo) para tama ang copy/search ng teksto sa PDF
+                let seg = null;
+                const flush = () => {
+                    if (seg && seg.text.trim()) page.drawText(seg.text, { x: seg.x, y: base, size: seg.size, font: seg.font, color: s140Rgb(seg.color || '000000') });
+                    seg = null;
+                };
+                l.toks.forEach(t => {
+                    const special = t.ws && /[^ ]/.test(t.w); // hal. en space — hindi iginuguhit, lapad lang
+                    if (special) { flush(); cx += t.width; return; }
+                    if (seg && (seg.font !== t.font || seg.size !== t.size || seg.color !== t.color)) flush();
+                    if (!seg) { if (t.ws) { cx += t.width; return; } seg = { text: '', x: cx, size: t.size, font: t.font, color: t.color }; }
+                    seg.text += t.w; cx += t.width;
+                });
+                flush();
+                y += l.h;
+            });
+        }
+        // Ilatag (at iguhit kung may doc) ang buong body. Ibinabalik ang taas ng bawat pahina.
+        function s140RenderBody(F, body, doc) {
+            const P = S140_PDF, used = [];
+            let page = null, y = 0;
+            const newPage = () => {
+                if (page !== null || used.length) used.push(y - P.top);
+                page = doc ? doc.addPage([P.pageW, P.pageH]) : false;
+                if (doc) page.drawText('S-140-TG  11/23', { x: P.marginL, y: P.footerBase, size: 10, font: F.reg, color: s140Rgb('000000') });
+                y = P.top;
+            };
+            newPage();
+            const tableLeft = P.marginL - P.cellPad;
+            body.forEach(el => {
+                if (el.kind === 'p') {
+                    if (el.pageBreak) { newPage(); return; }
+                    y += s140LayoutPara(F, el, 540).h;
+                    return;
+                }
+                const colX = [tableLeft]; el.grid.forEach(g => colX.push(colX[colX.length - 1] + g / 20));
+                el.rows.forEach(row => {
+                    let col = 0;
+                    const cells = row.cells.map(c => {
+                        const x = colX[col], w = colX[col + c.span] - colX[col]; col += c.span;
+                        const lays = c.paras.map(p => s140LayoutPara(F, p, w - 2 * P.cellPad));
+                        const borderW = c.bottom ? (c.bottom.val === 'thinThickSmallGap' ? 3.0 : c.bottom.sz / 8) : 0;
+                        return { c, x, w, lays, h: lays.reduce((s, l) => s + l.h, 0), borderW };
+                    });
+                    const borderW = Math.max(0, ...cells.map(k => k.borderW));
+                    const rowH = Math.max(row.minH / 20, ...cells.map(k => k.h)) + borderW;
+                    if (y + rowH > P.bodyBottom + 0.01 && y > P.top + 1) newPage();
+                    if (doc) cells.forEach(k => {
+                        const bottomY = P.pageH - (y + rowH);
+                        if (k.c.fill) page.drawRectangle({ x: k.x, y: bottomY + borderW, width: k.w, height: rowH - borderW, color: s140Rgb(k.c.fill) });
+                        const inner = rowH - borderW;
+                        let top = y + (k.c.valign === 'center' ? (inner - k.h) / 2 : k.c.valign === 'bottom' ? inner - k.h : 0);
+                        k.c.paras.forEach((p, i) => { s140DrawPara(page, k.lays[i], p, k.x, k.w, top); top += k.lays[i].h; });
+                        if (k.c.bottom) {
+                            const col = s140Rgb(k.c.bottom.color);
+                            if (k.c.bottom.val === 'thinThickSmallGap') {
+                                page.drawRectangle({ x: k.x, y: bottomY + 2.25, width: k.w, height: 0.6, color: col });
+                                page.drawRectangle({ x: k.x, y: bottomY, width: k.w, height: 1.5, color: col });
+                            } else page.drawRectangle({ x: k.x, y: bottomY, width: k.w, height: Math.max(0.5, k.c.bottom.sz / 8), color: col });
+                        }
+                    });
+                    y += rowH;
+                });
+            });
+            used.push(y - P.top);
+            return used;
+        }
+        // (buong font ang naka-embed — mas sigurado ang tamang pagpapakita sa lahat ng PDF viewer; ~650 KB bawat PDF)
+        async function s140PdfFonts(doc) {
+            doc.registerFontkit(fontkit);
+            return {
+                reg: await doc.embedFont(S140_FONT_REG, { subset: false, features: { liga: false, clig: false, dlig: false, calt: false } }),
+                bold: await doc.embedFont(S140_FONT_BOLD, { subset: false, features: { liga: false, clig: false, dlig: false, calt: false } }),
+                title: await doc.embedFont(S140_FONT_TITLE, { subset: false, features: { liga: false, clig: false, dlig: false, calt: false } })
+            };
+        }
+        async function buildS140Pdf(year, month) {
+            await ensureS140PdfLibs();
+            const thursdays = getThursdaysForMonthByWeekStart(year, month);
+            const doc = await PDFLib.PDFDocument.create();
+            const F = await s140PdfFonts(doc);
+            const avail = S140_PDF.bodyBottom - S140_PDF.top;
+            // Parehong luwag ng Word; kung hindi kasya sa aktuwal na sukat ng font, unti-unting liliitan
+            let xml = buildS140BodyXml(thursdays), body = s140ParseBody(xml);
+            const fitsPages = b => { const u = s140RenderBody(F, b, null); return u.length === Math.ceil(thursdays.length / 2) && u.every(h => h <= avail); };
+            if (!fitsPages(body)) {
+                const firstRow = (xml.match(/w:trHeight w:val="(\d+)"/) || [])[1];
+                for (let k = 20; k >= 0; k--) {
+                    const sp = s140Lerp(k / 20);
+                    if (firstRow && sp.row >= +firstRow) continue;
+                    const b2 = s140ParseBody(buildS140BodyXml(thursdays, sp));
+                    body = b2;
+                    if (fitsPages(b2)) break;
+                }
+            }
+            s140RenderBody(F, body, doc);
+            const mName = TG_MONTHS[month];
+            doc.setTitle(`S-140 ${mName} ${year} — Iskedyul ng Pulong sa Gitnang Sanlinggo`);
+            doc.setCreator('Assignment Tracker');
+            return await doc.save();
         }
 
         // Initialize on load

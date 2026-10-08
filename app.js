@@ -1391,7 +1391,7 @@
 
         // v27: pangkalahatang pag-save sa isang folder na pinili minsan (naaalala sa IndexedDB sa ilalim ng `key`)
         let lastSaveFolderName = '';
-        async function saveToDir(key, pickerId, filename, blob, startInKey) {
+        async function saveToDir(key, pickerId, filename, blob, startInKey, subfolder) {
             lastSaveFolderName = '';
             // Fallback path when the API is not available (e.g. file://, unsupported browser)
             if (!window.showDirectoryPicker) {
@@ -1416,6 +1416,11 @@
                     dir = await window.showDirectoryPicker(opts);
                     await idbSetHandle(dir, key);
                 }
+                // v31: isang subfolder sa loob ng piniling folder (hal. "backups") — ginagawa kung wala pa.
+                // Kung ang mismong piniling folder ay may ganoong pangalan na, doon na mismo (hindi backups\backups).
+                if (subfolder && String(dir.name || '').toLowerCase() !== subfolder.toLowerCase()) {
+                    dir = await dir.getDirectoryHandle(subfolder, { create: true });
+                }
                 const fileHandle = await dir.getFileHandle(filename, { create: true });
                 const writable = await fileHandle.createWritable();
                 await writable.write(blob);
@@ -1430,6 +1435,11 @@
         }
         async function saveToBackups(filename, blob) {
             return saveToDir('backupDir', 'ncBackups', filename, blob);
+        }
+        // v31/v32: ang JSON backup at Excel export ay sa "backups" subfolder (hal. new-cong-files\backups), hindi na nakakalat sa labas
+        const BACKUP_SUBFOLDER = 'backups';
+        async function saveBackupJson(filename, blob) {
+            return saveToDir('backupDir', 'ncBackups', filename, blob, null, BACKUP_SUBFOLDER);
         }
         // v27: S-140 PDF → folder na "schedule" (pipiliin minsan; nagsisimula malapit sa backups folder)
         async function saveToSchedule(filename, blob) {
@@ -1456,13 +1466,181 @@
             const jsonStr = JSON.stringify(data, null, 2);
             const blob = new Blob([jsonStr], { type: 'application/json' });
             const dateStr = new Date().toISOString().slice(0, 10);
-            const where = await saveToBackups(`new-cong-tracker-backup-${dateStr}.json`, blob);
+            const where = await saveBackupJson(`new-cong-tracker-backup-${dateStr}.json`, blob);
             localStorage.setItem('nc_lastBackup', new Date().toISOString());
             const _br = document.getElementById('backupReminder'); if (_br) _br.classList.add('hidden');
-            alert(where === 'folder' ? 'Data saved to your backups folder!' : 'Data exported successfully! The file has been downloaded.');
+            alert(where === 'folder' ? `Backup saved to the "${lastSaveFolderName || BACKUP_SUBFOLDER}" folder!\n(new-cong-tracker-backup-${dateStr}.json)` : 'Data exported successfully! The file has been downloaded.');
         }
 
         // Export to Excel with colored grids and separate sheets per category
+
+        // ==================== v33: mga estudyante sa Excel export ====================
+        // Tatlong sheet: "Student Parts" (lahat ng bahagi ayon sa petsa), "Students Grid" (bawat tao × linggo, BR/ST/AS),
+        // "Students Summary" (ilang beses estudyante / assistant, huling bahagi, ilang linggo nang naghihintay).
+        const XL_GOLD = 'BE8900', XL_GOLD_DARK = '92400E', XL_GOLD_PALE = 'FEF3C7', XL_NAVY = '1E3A5F';
+        function xlCell(v, o = {}) {
+            const isNum = typeof v === 'number';
+            const c = { v: v ?? '', t: isNum ? 'n' : 's', s: {
+                font: { color: { rgb: o.fg || '111827' }, bold: !!o.b, italic: !!o.i, sz: o.sz || 11 },
+                alignment: { horizontal: o.al || 'left', vertical: 'center', wrapText: !!o.wrap },
+                border: { top: { style: 'thin', color: { rgb: 'D1D5DB' } }, bottom: { style: 'thin', color: { rgb: 'D1D5DB' } },
+                          left: { style: 'thin', color: { rgb: 'D1D5DB' } }, right: { style: 'thin', color: { rgb: 'D1D5DB' } } } } };
+            if (o.bg) c.s.fill = { fgColor: { rgb: o.bg } };
+            return c;
+        }
+        function xlDate(d) { return new Date(d + 'T12:00:00+08:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
+        function studentExcelWeeks() {
+            return Object.keys(meetingEditorData).map(k => (k.match(/^week_(\d{4}-\d{2}-\d{2})$/) || [])[1]).filter(Boolean).sort()
+                .filter(d => { const md = meetingEditorData[getMeetingEditorKey(d)] || {};
+                    return isNoMeetingWeek(d) || md.bibleReadingName || md.bibleReading || (md.ministryParts || []).length; });
+        }
+        function buildStudentExcelSheets() {
+            const res = { sheets: [], hasData: false, partCount: 0, personCount: 0 };
+            if (typeof XLSX === 'undefined') return res;
+            const weeks = studentExcelWeeks();
+            const today = manilaTodayISO(), nowThu = thursdayOfWeek(today);
+            const roleOf = p => (p ? (p.gender === 'Brother' || p.gender === 'Sister' ? p.gender : '') : '');
+            const nameOf = (id, typed) => { const p = id ? getPerson(id) : null; return p ? personLabel(p) : (typed || '').trim(); };
+
+            // ---- 1. Student Parts (talaan ayon sa petsa) ----
+            const rows = [];
+            rows.push([xlCell('Student Parts — Our Christian Life and Ministry', { bg: XL_GOLD, fg: 'FFFFFF', b: 1, sz: 13 })]);
+            rows.push(['Thursday', '#', 'Part', 'Title (workbook)', 'Student', 'Assistant', 'Note'].map(h => xlCell(h, { bg: XL_NAVY, fg: 'FFFFFF', b: 1, al: 'center' })));
+            const merges = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }];
+            let lastMonth = '';
+            // lumipas na linggo na walang kahit isang pangalan (hal. test data bago ang kongregasyon) — hindi na isasama
+            const anyName = md => !!((md.bibleReadingName || '').trim() || (md.ministryParts || []).some(p => (p.name || '').trim() || (p.assistant || '').trim()));
+            weeks.filter(d => d >= nowThu || isNoMeetingWeek(d) || anyName(meetingEditorData[getMeetingEditorKey(d)] || {})).forEach(d => {
+                const ym = d.slice(0, 7);
+                if (ym !== lastMonth) {
+                    lastMonth = ym;
+                    const label = new Date(d + 'T12:00:00+08:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toUpperCase();
+                    rows.push([xlCell(label, { bg: XL_GOLD_PALE, fg: XL_GOLD_DARK, b: 1 }), ...Array(6).fill(0).map(() => xlCell('', { bg: XL_GOLD_PALE }))]);
+                    merges.push({ s: { r: rows.length - 1, c: 0 }, e: { r: rows.length - 1, c: 6 } });
+                }
+                const past = d < nowThu;
+                const zebra = past ? 'F3F4F6' : 'FFFFFF', dim = past ? '6B7280' : '111827';
+                const md = meetingEditorData[getMeetingEditorKey(d)] || {};
+                if (isNoMeetingWeek(d)) {
+                    rows.push([xlCell(xlDate(d), { bg: zebra, fg: dim, b: 1 }), xlCell('', { bg: zebra }), xlCell('No meeting', { bg: zebra, fg: dim, i: 1 }),
+                        xlCell(String(weekTypeText(d) || ''), { bg: zebra, fg: dim, i: 1 }), xlCell('', { bg: zebra }), xlCell('', { bg: zebra }), xlCell('', { bg: zebra })]);
+                    return;
+                }
+                const line = (no, part, title, stu, asst, note) => {
+                    rows.push([xlCell(xlDate(d), { bg: zebra, fg: dim, b: 1 }), xlCell(no, { bg: zebra, fg: dim, al: 'center' }), xlCell(part, { bg: zebra, fg: dim }),
+                        xlCell(title, { bg: zebra, fg: dim }), xlCell(stu || '—', { bg: stu ? zebra : 'FEF2F2', fg: stu ? dim : 'B91C1C', b: !!stu }),
+                        xlCell(asst, { bg: zebra, fg: dim }), xlCell(note || (past ? 'past' : ''), { bg: zebra, fg: note ? 'B45309' : '9CA3AF', i: 1 })]);
+                    if (stu) res.partCount++;
+                };
+                line(3, 'Bible Reading', ['Pagbabasa ng Bibliya', md.bibleReading].filter(Boolean).join(' — '), nameOf(md.bibleReadingId, md.bibleReadingName), '',
+                    (md.bibleReadingName || '').trim() ? '' : (past ? '' : 'no name yet'));
+                (md.ministryParts || []).forEach((p, i) => {
+                    const kind = getPartKind(p), K = STUDENT_KINDS[kind] || STUDENT_KINDS.unknown;
+                    const stu = nameOf(p.studentId, p.name);
+                    const asst = K.assistant ? nameOf(p.assistantId, p.assistant) : '';
+                    let note = '';
+                    if (kind === 'discussion') note = 'Elder/MS (not a student part)';
+                    else if (!stu && !past) note = 'no name yet';
+                    else if (K.assistant && stu && !asst && !past) note = 'no assistant yet';
+                    if (kind === 'discussion') {
+                        rows.push([xlCell(xlDate(d), { bg: zebra, fg: dim, b: 1 }), xlCell(partNumberOf(p.title, 4 + i), { bg: zebra, fg: dim, al: 'center' }), xlCell('Discussion', { bg: zebra, fg: dim }),
+                            xlCell(titleText(p.title), { bg: zebra, fg: dim }), xlCell(stu, { bg: zebra, fg: dim }), xlCell('', { bg: zebra }), xlCell(note, { bg: zebra, fg: '6B7280', i: 1 })]);
+                        return;
+                    }
+                    line(partNumberOf(p.title, 4 + i), K.short, titleText(p.title), stu, asst, note);
+                });
+            });
+            const ws1 = XLSX.utils.aoa_to_sheet(rows);
+            ws1['!cols'] = [{ wch: 14 }, { wch: 4 }, { wch: 24 }, { wch: 52 }, { wch: 26 }, { wch: 26 }, { wch: 26 }];
+            ws1['!merges'] = merges;
+            ws1['!freeze'] = { xSplit: 0, ySplit: 2 };
+            ws1['!views'] = [{ state: 'frozen', ySplit: 2 }];
+
+            // ---- 2. Students Grid (tao × linggo) ----
+            const hist = buildStudentHistory();
+            const meetWeeks = weeks.filter(d => !isNoMeetingWeek(d) && (d >= nowThu || anyName(meetingEditorData[getMeetingEditorKey(d)] || {})));
+            const inRotation = p => p.active !== false && p.gender && (p.atas !== 'Elder' || studentSettings.includeElders);
+            const pool = people.filter(p => inRotation(p) || (hist[p.id] || []).length);
+            const sortP = (a, b) => (a.gender === b.gender ? 0 : a.gender === 'Brother' ? -1 : 1) || personLabel(a).localeCompare(personLabel(b));
+            pool.sort(sortP);
+            res.personCount = pool.length;
+            const g = [];
+            g.push([xlCell('Students Grid — BR = Bible Reading · ST = Student · AS = Assistant', { bg: XL_GOLD, fg: 'FFFFFF', b: 1 })]);
+            const monthRow = [xlCell('Name', { bg: XL_NAVY, fg: 'FFFFFF', b: 1 }), xlCell('', { bg: XL_NAVY })];
+            const dayRow = [xlCell('', { bg: XL_NAVY }), xlCell('B/S', { bg: XL_NAVY, fg: 'FFFFFF', b: 1, al: 'center' })];
+            let pm = '';
+            meetWeeks.forEach(d => {
+                const ym = d.slice(0, 7);
+                monthRow.push(xlCell(ym !== pm ? new Date(d + 'T12:00:00+08:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '', { bg: '2563EB', fg: 'FFFFFF', b: 1, al: 'center' }));
+                pm = ym;
+                dayRow.push(xlCell(String(+d.slice(8)), { bg: d === nowThu ? '2563EB' : XL_NAVY, fg: 'FFFFFF', b: 1, al: 'center' }));
+            });
+            monthRow.push(xlCell('Student', { bg: XL_GOLD_DARK, fg: 'FFFFFF', b: 1, al: 'center' }), xlCell('Assistant', { bg: XL_GOLD_DARK, fg: 'FFFFFF', b: 1, al: 'center' }));
+            dayRow.push(xlCell('', { bg: XL_GOLD_DARK }), xlCell('', { bg: XL_GOLD_DARK }));
+            g.push(monthRow, dayRow);
+            let prevG = null;
+            pool.forEach((p, idx) => {
+                if (p.gender !== prevG) {
+                    prevG = p.gender;
+                    g.push([xlCell(p.gender === 'Brother' ? 'BROTHERS' : p.gender === 'Sister' ? 'SISTERS' : 'NO BROTHER/SISTER SET', { bg: 'E5E7EB', fg: '374151', b: 1 })]);
+                }
+                const bg = idx % 2 ? 'F9FAFB' : 'FFFFFF';
+                const ev = hist[p.id] || [];
+                const row = [xlCell(personLabel(p) + (p.pioneer ? ' (RP)' : ''), { bg, b: 1 }), xlCell(p.gender === 'Brother' ? 'B' : p.gender === 'Sister' ? 'S' : '', { bg, al: 'center' })];
+                meetWeeks.forEach(d => {
+                    const e = ev.filter(x => x.date === d);
+                    const code = e.map(x => x.role === 'Assistant' ? 'AS' : x.kind === 'bible' ? 'BR' : 'ST').join('/');
+                    row.push(code ? xlCell(code, { bg: XL_GOLD_PALE, fg: XL_GOLD_DARK, b: 1, al: 'center' }) : xlCell('', { bg }));
+                });
+                row.push(xlCell(ev.filter(x => x.role === 'Estudyante').length, { bg: 'FFF7ED', fg: XL_GOLD_DARK, b: 1, al: 'center' }),
+                    xlCell(ev.filter(x => x.role === 'Assistant').length, { bg: 'FFF7ED', fg: XL_GOLD_DARK, al: 'center' }));
+                g.push(row);
+            });
+            const ws2 = XLSX.utils.aoa_to_sheet(g);
+            ws2['!cols'] = [{ wch: 28 }, { wch: 5 }, ...meetWeeks.map(() => ({ wch: 5 })), { wch: 9 }, { wch: 10 }];
+            ws2['!views'] = [{ state: 'frozen', xSplit: 2, ySplit: 3 }];
+
+            // ---- 3. Students Summary ----
+            const s = [];
+            s.push([xlCell(`Students Summary — as of ${xlDate(today)}`, { bg: XL_GOLD, fg: 'FFFFFF', b: 1, sz: 13 })]);
+            s.push(['Name', 'B/S', 'RP', 'Role', 'As student', 'As assistant', 'Bible readings', 'Last student part', 'Weeks since', 'Next part', 'Status']
+                .map(h => xlCell(h, { bg: XL_NAVY, fg: 'FFFFFF', b: 1, al: 'center', wrap: true })));
+            const rowsS = pool.map(p => {
+                const ev = hist[p.id] || [];
+                const past = ev.filter(e => e.date <= today);
+                const lastStu = past.find(e => e.role === 'Estudyante') || null;
+                const next = [...ev].reverse().find(e => e.date > today) || null;
+                const wait = lastStu ? weeksBetween(lastStu.date, nowThu) : null;
+                let status = '', sbg = 'FFFFFF', sfg = '111827';
+                if (!inRotation(p)) { status = p.active === false ? 'inactive' : 'not in rotation'; sfg = '6B7280'; }
+                else if (!lastStu && !next) { status = '🔴 never had a part'; sbg = 'FEE2E2'; sfg = 'B91C1C'; }
+                else if (lastStu && !next && wait >= FAIR_WAIT_WEEKS) { status = `🟡 waiting ${wait} weeks`; sbg = 'FEF3C7'; sfg = '92400E'; }
+                else if (next) { status = 'scheduled'; sfg = '15803D'; }
+                return { p, ev, lastStu, next, wait, status, sbg, sfg };
+            });
+            rowsS.sort((a, b) => sortP(a.p, b.p));
+            rowsS.forEach((r, idx) => {
+                const bg = idx % 2 ? 'F9FAFB' : 'FFFFFF';
+                const kindName = e => e ? (e.kind === 'bible' ? 'Bible Reading' : (STUDENT_KINDS[e.kind]?.short || 'Student part')) : '';
+                s.push([xlCell(personLabel(r.p), { bg, b: 1 }), xlCell(roleOf(r.p), { bg, al: 'center' }), xlCell(r.p.pioneer ? 'RP' : '', { bg, al: 'center' }),
+                    xlCell(r.p.atas || '', { bg, al: 'center' }),
+                    xlCell(r.ev.filter(e => e.role === 'Estudyante').length, { bg, al: 'center', b: 1 }),
+                    xlCell(r.ev.filter(e => e.role === 'Assistant').length, { bg, al: 'center' }),
+                    xlCell(r.ev.filter(e => e.kind === 'bible').length, { bg, al: 'center' }),
+                    xlCell(r.lastStu ? `${xlDate(r.lastStu.date)} · ${kindName(r.lastStu)}` : '—', { bg }),
+                    xlCell(r.wait ?? '', { bg, al: 'center' }),
+                    xlCell(r.next ? `${xlDate(r.next.date)} · ${r.next.role === 'Assistant' ? 'Assistant' : kindName(r.next)}` : '', { bg }),
+                    xlCell(r.status, { bg: r.sbg, fg: r.sfg, b: 1 })]);
+            });
+            const ws3 = XLSX.utils.aoa_to_sheet(s);
+            ws3['!cols'] = [{ wch: 28 }, { wch: 8 }, { wch: 5 }, { wch: 13 }, { wch: 10 }, { wch: 11 }, { wch: 10 }, { wch: 34 }, { wch: 9 }, { wch: 34 }, { wch: 22 }];
+            ws3['!views'] = [{ state: 'frozen', ySplit: 2 }];
+
+            res.hasData = res.partCount > 0 || people.length > 0;
+            if (res.hasData) res.sheets = [{ name: 'Students Summary', ws: ws3 }, { name: 'Student Parts', ws: ws1 }, { name: 'Students Grid', ws: ws2 }];
+            return res;
+        }
+
         async function exportToExcel() {
             if (typeof XLSX === 'undefined') {
                 alert('Excel library not loaded. Please check your internet connection and refresh the page.');
@@ -1476,7 +1654,9 @@
 
             // Get all weeks from assignments (sorted)
             const allWeeks = [...new Set(assignments.map(a => a.date))].sort();
-            if (allWeeks.length === 0) {
+            loadMeetingEditorData();
+            const stuSheets = buildStudentExcelSheets();   // v33: mga estudyante (Students tab)
+            if (allWeeks.length === 0 && !stuSheets.hasData) {
                 alert('No assignments to export yet.');
                 return;
             }
@@ -1644,16 +1824,18 @@
             XLSX.utils.book_append_sheet(wb, summaryWs, 'Summary');
             
             // Reorder sheets to put Summary first
-            const sheetOrder = ['Summary', ...ASSIGNMENT_TYPES.map(t => typeLabel(t).substring(0, 31))];
+            stuSheets.sheets.forEach(s => XLSX.utils.book_append_sheet(wb, s.ws, s.name));
+            const sheetOrder = ['Summary', ...ASSIGNMENT_TYPES.map(t => typeLabel(t).substring(0, 31)), ...stuSheets.sheets.map(s => s.name)];
             wb.SheetNames = sheetOrder.filter(name => wb.SheetNames.includes(name));
 
             // Export
             const dateStr = new Date().toISOString().slice(0, 10);
             const wbArray = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
             const xlsxBlob = new Blob([wbArray], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-            const whereXlsx = await saveToBackups(`new-cong-tracker-${dateStr}.xlsx`, xlsxBlob);
+            const whereXlsx = await saveBackupJson(`new-cong-tracker-${dateStr}.xlsx`, xlsxBlob); // v32: kasama ng JSON sa "backups"
             
-            alert(whereXlsx === 'folder' ? 'Excel saved to your backups folder!' : 'Excel file exported successfully!');
+            const stuNote = stuSheets.hasData ? `\n\nIncludes the students: ${stuSheets.sheets.map(s => s.name).join(', ')} (${stuSheets.partCount} student part(s), ${stuSheets.personCount} people).` : '';
+            alert((whereXlsx === 'folder' ? `Excel saved to the "${lastSaveFolderName || BACKUP_SUBFOLDER}" folder!\n(new-cong-tracker-${dateStr}.xlsx)` : 'Excel file exported successfully!') + stuNote);
         }
 
         // Import data from JSON file

@@ -15,6 +15,8 @@
     <script src="lib/jszip.min.js"></script>
         <script src="lib/pdf-lib.min.js"></script>
     <script src="lib/s89-base.js"></script>
+    <script src="lib/s89-image.js"></script>
+    <script src="lib/wb-context.js"></script>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -23,7 +25,7 @@
             <!-- Header -->
             <div class="card p-8 mb-8">
                 <h1 class="text-4xl font-bold text-gray-900 mb-2">📋 Assignment Tracker – Bagong Kongregasyon</h1>
-                <p class="text-gray-600 text-lg">Manage Thursday midweek meeting assignments fairly & easily</p>
+                <p class="text-gray-600 text-lg">Manage Thursday midweek meeting assignments fairly & easily <span id="appVersion" title="App version — if this does not show the latest version, close and reopen the app" style="font-size:12px;color:#9ca3af;margin-left:6px;"></span></p>
             </div>
 
             <!-- Backup reminder banner -->
@@ -121,16 +123,18 @@
                     <div id="meetingSettingsPanel" class="mb-4"></div>
                     <div id="specialWeeksPanel" class="mb-4"></div>
 
-                    <!-- Congregation Header Preview -->
-                    <div class="text-center mb-4 p-4 bg-gray-50 rounded-lg">
-                        <h3 class="text-lg font-bold" id="congNameHeader">[PANGALAN NG KONGREGASYON]</h3>
-                        <p class="text-sm text-gray-600">OF JEHOVAH'S WITNESSES</p>
-                        <p class="text-sm font-semibold mt-2" id="pdfEditorMonthTitle">ATING BUHAY AT MINISTERYONG KRISTIYANO (<span id="pdfMonthYearLabel"></span>)</p>
-                    </div>
-
-                    <!-- 2x2 Grid of Weeks -->
-                    <div class="meeting-grid-2x2" id="meetingWeeksContainer">
-                        <!-- Weeks will be rendered here by JavaScript -->
+                    <!-- v60: kamukha ng S-140 -->
+                    <div class="se-page">
+                        <div class="se-pagehead">
+                            <div>
+                                <p class="se-month" id="pdfEditorMonthTitle"><span id="pdfMonthYearLabel"></span></p>
+                                <h3 class="se-cong" id="congNameHeader">[PANGALAN NG KONGREGASYON]</h3>
+                            </div>
+                            <h2 class="se-title-main">Iskedyul ng Pulong sa Gitnang Sanlinggo</h2>
+                        </div>
+                        <div id="meetingWeeksContainer">
+                            <!-- Weeks will be rendered here by JavaScript -->
+                        </div>
                     </div>
                 </div>
             </div>
@@ -305,8 +309,16 @@
     <script src="app.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
+            // v62: kapag may bagong bersyon na na-install, i-reload nang isang beses para agad itong magamit
+            const hadController = !!navigator.serviceWorker.controller;
+            let reloading = false;
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                if (!hadController || reloading) return;
+                reloading = true;
+                window.location.reload();
+            });
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW registration failed:', err));
+                navigator.serviceWorker.register('sw.js').then(r => r.update()).catch(err => console.warn('SW registration failed:', err));
             });
         }
     </script>

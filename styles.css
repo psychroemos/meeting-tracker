@@ -189,6 +189,12 @@
 .meeting-2col .meeting-part-name { flex: 0 0 100%; text-align: left; min-width: 0; }
 .meeting-2col .meeting-part-pair { justify-content: flex-start; }
 .meeting-2col .meeting-part-number { display: inline-block; }
+/* v48: workbook detail line (context of a ministry part) */
+.ministry-detail { flex: 0 0 100%; color: #6b7280; font-style: italic; font-size: 9px; padding-left: 20px; margin-top: 1px; line-height: 1.3; }
+/* v57: Chairman's talk inside Apply Yourself — shows the chairman instead of name inputs */
+.chair-part-name { color: #7c2d12; font-size: 10px; font-weight: 400; }
+/* v49: workbook detail line in the Students tab slot */
+.stu-detail { color: #6b7280; font-style: italic; font-size: 12px; margin: 2px 0 4px; padding-left: 10px; border-left: 2px solid #fde68a; line-height: 1.35; }
 
 
 /* ===== Students tab (Hakbang 2) ===== */
@@ -389,3 +395,59 @@
 .grid-range-label { font-weight:700; white-space:nowrap; }
 .grid-range-count select { border:1px solid #d1d5db; border-radius:6px; padding:2px 4px; font-size:12px; background:#fff; margin-left:4px; }
 .grid-table th.month-header.year-start { border-left:3px solid #f59e0b; }
+
+/* ===== v60: Schedule Editor na kamukha ng S-140 ===== */
+.se-page { font-family: Calibri, Carlito, "Segoe UI", Arial, sans-serif; color: #111827; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 18px 22px 22px; }
+.se-pagehead { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; padding-bottom: 6px; border-bottom: 4px double #575A5D; margin-bottom: 14px; flex-wrap: wrap; }
+.se-cong { font-size: 15px; font-weight: 700; letter-spacing: .2px; margin: 0; }
+.se-title-main { font-family: Cambria, Caladea, Georgia, serif; font-size: 24px; font-weight: 700; margin: 0; line-height: 1.1; }
+.se-month { font-size: 12px; color: #6b7280; margin: 0 0 2px; }
+.se-week { font-size: 14px; }
+.se-row, .se-head { display: grid; grid-template-columns: 46px minmax(0, 1fr) 150px minmax(190px, 34%); column-gap: 10px; align-items: baseline; }
+.se-head { padding: 2px 0 6px; align-items: center; }
+.se-date { grid-column: 1 / 3; display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 15px; text-transform: uppercase; flex-wrap: wrap; }
+.se-pipe { font-weight: 700; }
+.se-co { color: #7E0024; font-size: 12px; font-weight: 700; }
+.se-row { padding: 2px 0; min-height: 26px; }
+.se-time { font-size: 12px; font-weight: 700; color: #575A5D; }
+.se-tcell { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 5px; min-width: 0; }
+.se-num { flex: 0 0 auto; }
+.se-min { white-space: nowrap; }
+.se-lbl { font-size: 11px; font-weight: 700; color: #575A5D; text-align: right; }
+.se-name { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.se-slash { color: #6b7280; }
+.se-empty { color: #b0b6bf; }
+.se-tba { color: #92400e; font-weight: 700; }
+.se-chair { color: #7c2d12; }
+.se-barrow { padding: 8px 0 2px; min-height: 0; }
+.se-bar { grid-column: 1 / 3; color: #fff; font-weight: 700; font-size: 13px; padding: 4px 10px; letter-spacing: .2px; }
+.se-k { background: #575A5D; } .se-m { background: #BE8900; } .se-l { background: #7E0024; }
+.se-ctx { flex: 0 0 100%; color: #6b7280; font-style: italic; font-size: 12px; line-height: 1.3; padding: 1px 0 3px 18px; }
+/* mga input na mukhang plain text hanggang i-hover o i-click */
+.se-in { font: inherit; color: inherit; background: transparent; border: 0; border-bottom: 1px dashed transparent; padding: 1px 2px; border-radius: 3px; min-width: 0; }
+.se-in:hover { border-bottom-color: #c7ccd3; background: #fafafa; }
+.se-in:focus { outline: none; border-bottom-color: #2563eb; background: #fffbeb; }
+.se-in::placeholder { color: #c0c5cc; font-style: italic; }
+textarea.se-in { resize: none; overflow: hidden; line-height: 1.3; display: block; }
+.se-title { flex: 1 1 200px; width: auto; }
+.se-song { width: 44px; text-align: left; }
+.se-bible { font: inherit; text-transform: uppercase; width: 220px; }
+.se-namein { flex: 1 1 0; width: 100%; }
+.se-x { visibility: hidden; border: 0; background: transparent; color: #dc2626; cursor: pointer; font-size: 13px; padding: 0 2px; }
+.se-row:hover .se-x { visibility: visible; }
+.se-addrow { min-height: 0; padding: 0 0 2px; }
+.se-add { border: 0; background: transparent; color: #9ca3af; font-size: 12px; cursor: pointer; padding: 1px 2px; }
+.se-add:hover { color: #2563eb; text-decoration: underline; }
+.se-note { color: #9ca3af; font-size: 12px; font-style: italic; }
+.se-sep { border-top: 2px dashed #a8b0ba; margin: 18px 0 14px; }
+.se-wt .week-type-row { background: transparent; border: 0; padding: 0 0 6px; font-size: 11px; color: #9ca3af; }
+.se-wt .week-type-row select { font-size: 11px; color: #6b7280; padding: 1px 4px; }
+.se-wt .week-type-row.wt-special, .se-wt .week-type-row.wt-special select { color: #9d174d; }
+.se-nomtg-bar { background: #eeeeef; color: #575A5D; font-weight: 700; text-align: center; padding: 10px; font-size: 13px; text-transform: uppercase; }
+.se-week .week-timing { margin-top: 10px; font-size: 12px; }
+@media (max-width: 760px) {
+    .se-row, .se-head { grid-template-columns: 40px minmax(0, 1fr); }
+    .se-lbl { grid-column: 2; text-align: left; padding-top: 2px; }
+    .se-name { grid-column: 2; }
+    .se-bar, .se-date { grid-column: 1 / 3; }
+}

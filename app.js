@@ -26,6 +26,12 @@
             return brother.category || 'Elder';
         }
 
+        // v44: pagkakasunod ayon sa pribilehiyo para sa Excel — Elder > MS > Pub/Brother
+        function brotherPrivRank(brother) {
+            const c = getBrotherCategory(brother);
+            return c === 'Elder' ? 0 : c === 'MS' ? 1 : 2;
+        }
+
         function getBrotherRowClass(brother, rowIdx) {
             return ''; // v14: badge + group header na lang (walang kulay ang buong hilera)
         }
@@ -41,6 +47,7 @@
         let selectedType = null;
         let autoAssignPreview = null;
         let autoAssignUnfilled = 0;
+        let autoAssignTbaLN = 0; // v62: ilang Lokal na Pangangailangan ang iniwang TBA
         let workbookPreview = null;
         let meetingEditorData = {}; // Stores editable fields for PDF editor
         let gridStartMonth = 1; // 1-12, the first month shown in the grid
@@ -60,9 +67,13 @@
         }
 
         // Initialize
+        const APP_VERSION = 'v62';
         function init() {
+            const vEl = document.getElementById('appVersion'); if (vEl) vEl.textContent = APP_VERSION;
             loadData();
             loadMeetingEditorData();
+            fillWeeksFromBuiltInWorkbook(); // v61: punan ang mga linggong hindi pa na-i-import (mula sa naka-bundle na workbook)
+            autoLoadBundledWorkbooks(); // v52: laging basahin ang context mula sa naka-bundle na EPUB (hindi umaasa sa manu-manong import)
             if (refreshBrotherCategories()) saveData(); // itugma ang Elder/MS/Brother sa Masterlist
             // Get current date in Philippine time (Asia/Manila)
             const manilaStr = new Date().toLocaleString('en-US', { timeZone: 'Asia/Manila' });
@@ -187,6 +198,7 @@
             
             if (savedBrothers) brothers = JSON.parse(savedBrothers);
             if (savedAssignments) assignments = JSON.parse(savedAssignments);
+            if (ensurePamSlots()) localStorage.setItem('nc_assignments', JSON.stringify(assignments)); // v62
             if (savedSunday) sundayAssignments = JSON.parse(savedSunday);
             if (savedEligibility) brotherEligibility = JSON.parse(savedEligibility);
             const savedPeople = localStorage.getItem('nc_people');
@@ -821,7 +833,8 @@
                         id: `assignment-${Date.now()}-${Math.random()}`,
                         date,
                         type,
-                        brotherId
+                        brotherId,
+                        slot: nextPamumuhaySlot(date) // v62
                     });
                 }
             } else {
@@ -924,38 +937,68 @@
             const originalAssignments = JSON.parse(JSON.stringify(assignments));
             const proposed = [];   // {date, type, brotherId, brotherName, score, monthLabel, dateLabel}
             const autoFrom = thursdayOfWeek(manilaTodayISO()); // v11: hindi pinupunan ang mga lumipas na linggo
-            let unfilled = 0;
+            let unfilled = 0, tbaLocalNeeds = 0;
             gridShuffleKey = Object.fromEntries(brothers.map(b => [b.id, Math.random()])); // v15: bagong shuffle bawat takbo
 
             // v13: ang mga buwang pinili sa "Auto-assign from … to …"
             range.months.forEach(([selectedYear, month]) => {
                 const thursdays = getThursdaysForMonthByWeekStart(selectedYear, month);
+                const mk = `${selectedYear}-${String(month).padStart(2, '0')}`;
                 thursdays.forEach(date => {
                     AUTO_FILL_ORDER.forEach(type => {
                         if (date < autoFrom) return; // lumipas na
                         if (!isSlotActive(date, type)) return; // walang pulong, o CBS kapag dalaw ng CO
-                        // Skip if this slot already has an assignment (empty slots only)
-                        const alreadyFilled = assignments.some(a => a.date === date && a.type === type);
-                        if (alreadyFilled) return;
+                        // v58: punuin ang LAHAT ng Living-as-Christians na bahagi sa linggo (dati, ang una lang)
+                        // v62: bawat bakanteng slot, MALIBAN sa Lokal na Pangangailangan — iyon ay laging TBA (ang mga elder ang magpapasiya)
+                        const need = type === 'Pamumuhay' ? livingSlotCount(date) : 1;
+                        if (type === 'Pamumuhay') for (let k = 0; k < need; k++) if (isLocalNeedsSlot(date, k) && !pamAssignmentAt(date, k)) tbaLocalNeeds++;
+                        const hasRoom = () => type === 'Pamumuhay' ? nextAutoLivingSlot(date) >= 0 : !assignments.some(a => a.date === date && a.type === type);
+                        for (let guard = 0; guard < 6 && hasRoom(); guard++) {
+                            const slot = type === 'Pamumuhay' ? nextAutoLivingSlot(date) : undefined;
+                            // Brothers already assigned/proposed on this SAME date (any type) — avoid double-booking in one week
+                            const takenThisDate = new Set(assignments.filter(a => a.date === date).map(a => a.brotherId));
+                            const free = s => !takenThisDate.has(s.brother.id);
+                            const suggestions = getSuggestionsForSlot(date, type) || [];
+                            // v58: sanayin ang MS — 10-min talk hanggang msTalkMax bawat buwan (hindi magkasunod),
+                            // v59: at msLivingMin na MS sa 15-min na Living as Christians (hindi sa Local Needs o bahaging pang-elder);
+                            //      lampas doon, hindi na MS (roleRuleViolation). Ang mas maiikling bahagi ay bukas sa MS.
+                            const msDue = (type === '10 mins talk' && msCountInMonth(mk, type) < msTalkCap()) ||
+                                (type === 'Pamumuhay' && !requiresElder(date, type) && !isShortLivingSlot(date, nextPamumuhaySlot(date)) && msCountInMonth(mk, type) < msLivingTarget()) ||
+                                // v61: dalawang bahagi sa Living as Christians — isang MS (sa bahaging puwede sa MS), isang elder
+                                (type === 'Pamumuhay' && need >= 2 && !requiresElder(date, type) && msLivingOnDate(date) === 0 &&
+                                    (isShortLivingSlot(date, nextPamumuhaySlot(date)) || msCountInMonth(mk, type) < msLivingTarget()));
+                            let pick = null, why = '';
+                            if (msDue) {
+                                const ms = suggestions.filter(s => free(s) && getBrotherCategory(s.brother) === 'MS');
+                                // MS na walang bahagi sa katabing pulong muna; ang may katabi ay kapag wala nang ibang linggo sa buwan para dito
+                                const needMS = (type === '10 mins talk' ? msTalkCap() : msLivingTarget()) - msCountInMonth(mk, type);
+                                const later = thursdays.filter(d2 => d2 > date && d2 >= autoFrom && isSlotActive(d2, type) && (() => {
+                                    if (type !== 'Pamumuhay') return !assignments.some(a => a.date === d2 && a.type === type);
+                                    const n2 = nextAutoLivingSlot(d2);
+                                    return n2 >= 0 && !isElderLivingSlot(d2, n2) && !isShortLivingSlot(d2, n2);
+                                })()).length;
+                                const roomLater = type === '10 mins talk' ? Math.ceil(later / 2) : later; // hindi puwedeng magkasunod ang talk ng MS
+                                pick = ms.find(s => s.tier === 0) || (needMS > roomLater ? ms.find(s => s.tier <= 1) : null) || null;
+                                if (pick) why = 'MS training';
+                            }
+                            if (!pick) pick = suggestions.find(free);
+                            if (!pick) { unfilled++; break; }
 
-                        // Brothers already assigned/proposed on this SAME date (any type) — avoid double-booking in one week
-                        const takenThisDate = new Set(assignments.filter(a => a.date === date).map(a => a.brotherId));
-
-                        const suggestions = getSuggestionsForSlot(date, type) || [];
-                        const pick = suggestions.find(s => !takenThisDate.has(s.brother.id));
-                        if (!pick) { unfilled++; return; }
-
-                        // Record proposal + temporarily commit for fairness in subsequent slots
-                        assignments.push({ id: `tmp-${Date.now()}-${Math.random()}`, date, type, brotherId: pick.brother.id });
-                        const dObj = new Date(date + 'T12:00:00+08:00');
-                        proposed.push({
-                            date, type,
-                            brotherId: pick.brother.id,
-                            brotherName: pick.brother.name,
-                            score: pick.score,
-                            monthLabel: `${monthNames[month]} ${selectedYear}`,
-                            dateLabel: dObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                        });
+                            // Record proposal + temporarily commit for fairness in subsequent slots
+                            const tmp = { id: `tmp-${Date.now()}-${Math.random()}`, date, type, brotherId: pick.brother.id };
+                            if (slot !== undefined) tmp.slot = slot;
+                            assignments.push(tmp);
+                            const dObj = new Date(date + 'T12:00:00+08:00');
+                            proposed.push({
+                                date, type, slot,
+                                brotherId: pick.brother.id,
+                                brotherName: pick.brother.name,
+                                score: pick.score,
+                                why,
+                                monthLabel: `${monthNames[month]} ${selectedYear}`,
+                                dateLabel: dObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                            });
+                        }
                     });
                 });
             });
@@ -966,6 +1009,7 @@
 
             autoAssignPreview = proposed;
             autoAssignUnfilled = unfilled;
+            autoAssignTbaLN = tbaLocalNeeds;
             renderAutoAssignPreview();
             document.getElementById('autoAssignModal').classList.remove('hidden');
             document.body.classList.add('modal-open');
@@ -985,7 +1029,7 @@
                 return;
             }
             if (applyBtn) applyBtn.disabled = false;
-            if (summary) summary.textContent = `${getAutoRange('grid').label}: ${proposed.length} proposed assignment(s)` + (autoAssignUnfilled ? ` • ${autoAssignUnfilled} slot(s) with no eligible brother` : '') + ' • past weeks are never filled; brothers are kept out of back-to-back meetings where possible. When brothers are equally due, the pick is random — press 🔀 Shuffle Again for a different draw.';
+            if (summary) summary.textContent = `${getAutoRange('grid').label}: ${proposed.length} proposed assignment(s)` + (autoAssignUnfilled ? ` • ${autoAssignUnfilled} slot(s) with no eligible brother` : '') + (autoAssignTbaLN ? ` • ${autoAssignTbaLN} Local Needs part(s) left as TBA for the elders` : '') + ' • past weeks are never filled; brothers are kept out of back-to-back meetings where possible. When brothers are equally due, the pick is random — press 🔀 Shuffle Again for a different draw.';
 
             // Group by month, then by date
             const byMonth = {};
@@ -1005,7 +1049,7 @@
                             <div class="flex-1 min-w-0">
                                 <span class="text-gray-600">${typeLabel(p.type)}:</span>
                                 <span class="font-semibold text-gray-900">${p.brotherName}</span>
-                                <span class="text-xs text-gray-500">(${p.score}%)</span>${loadTags(brothers.find(b => b.id === p.brotherId))}
+                                <span class="text-xs text-gray-500">(${p.score}%)</span>${loadTags(brothers.find(b => b.id === p.brotherId))}${p.why ? ` <span class="stu-badge" title="Picked to give ministerial servants practice">🎓 ${escHtml(p.why)}</span>` : ''}
                             </div>
                             <button onclick="removeAutoAssignItem(${p.idx})" class="remove-part-btn" title="Remove">✕</button>
                         </div>`;
@@ -1027,18 +1071,25 @@
             const proposed = autoAssignPreview || [];
             if (proposed.length === 0) { closeAutoAssignModal(); return; }
             pushAssignmentUndoState();
+            let applied = 0;
             proposed.forEach(p => {
-                // Re-check the slot is still empty (safety) before assigning
-                const stillEmpty = !assignments.some(a => a.date === p.date && a.type === p.type);
+                // Re-check the slot is still empty (safety) before assigning.
+                // v62: sa Living as Christians, ang mismong slot ang tinitingnan — dati, natatapon ang ikalawang bahagi ng linggo
+                const stillEmpty = p.type === 'Pamumuhay'
+                    ? Number.isInteger(p.slot) && !pamAssignmentAt(p.date, p.slot) && !assignments.some(a => a.date === p.date && a.type === p.type && a.brotherId === p.brotherId)
+                    : !assignments.some(a => a.date === p.date && a.type === p.type);
                 if (stillEmpty) {
-                    assignments.push({ id: `assignment-${Date.now()}-${Math.random()}`, date: p.date, type: p.type, brotherId: p.brotherId });
+                    const na = { id: `assignment-${Date.now()}-${Math.random()}`, date: p.date, type: p.type, brotherId: p.brotherId };
+                    if (p.type === 'Pamumuhay') na.slot = p.slot;
+                    assignments.push(na);
+                    applied++;
                 }
             });
             saveData();
             autoAssignPreview = null;
             closeAutoAssignModal();
             render();
-            alert(`Applied ${proposed.length} assignment(s). You can undo with ↩ Undo Last.`);
+            alert(`Applied ${applied} assignment(s).` + (applied < proposed.length ? ` ${proposed.length - applied} skipped because the slot was already filled.` : '') + ` You can undo with ↩ Undo Last.`);
         }
 
         function closeAutoAssignModal() {
@@ -1131,7 +1182,7 @@
             let totalWeeks = 0;
             for (const { key: m } of gridMonthsList) totalWeeks += thursdaysByMonth[m].length;
 
-            let html = renderS38ConflictBanner() + renderSpacingBanner() + '<table class="grid-table grid-v14">';
+            let html = renderNoMeetingBanner() + renderS38ConflictBanner() + renderMsTargetBanner() + renderSpacingBanner() + '<table class="grid-table grid-v14">';
             
             // Header row 1: Month names
             html += '<thead><tr><th class="name-cell" rowspan="2">Name</th>';
@@ -1321,12 +1372,9 @@
                 }
 
                 // Add new assignment
-                assignments.push({
-                    id: `assignment-${Date.now()}-${Math.random()}`,
-                    date,
-                    type,
-                    brotherId
-                });
+                const na = { id: `assignment-${Date.now()}-${Math.random()}`, date, type, brotherId };
+                if (type === 'Pamumuhay') na.slot = nextPamumuhaySlot(date); // v62
+                assignments.push(na);
             }
 
             saveData();
@@ -1450,6 +1498,60 @@
             alert('Next time you export the S-140 or S-89 slips, the app will ask you to pick the folder again.\n\nPick: Coding\\new-cong-files\\schedule');
         }
 
+        // v37: i-save ang maraming file sa isang subfolder sa loob ng "schedule" folder (hal. "S-89 Slips").
+        // Minsan lang hihingiin ang folder; gagawin ang subfolder kung wala pa. files = [{name, blob}].
+        async function saveManyToScheduleSub(subfolder, files) {
+            return saveManyToSchedulePath(subfolder ? [subfolder] : [], files);
+        }
+        // v55: folder kada buwan — "2026-11 November" (YYYY-MM sa unahan para maayos ang pagkakasunod sa Explorer)
+        const MONTH_NAMES_EN = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+        function monthFolderName(year, month) { return `${year}-${String(month).padStart(2, '0')} ${MONTH_NAMES_EN[month]}`; }
+        // v55: i-save sa isang path ng mga subfolder sa loob ng schedule folder (hal. ["2026-11 November", "S-89 Slips"]); ginagawa kung wala pa
+        async function saveManyToSchedulePath(pathParts, files) {
+            lastSaveFolderName = '';
+            if (!window.showDirectoryPicker) {
+                files.forEach(f => downloadBlobFallback(f.name, f.blob));
+                return { where: 'download', folder: '', saved: files.length };
+            }
+            try {
+                let dir = await idbGetHandle('scheduleDir');
+                if (dir) {
+                    const perm = await dir.queryPermission({ mode: 'readwrite' });
+                    if (perm !== 'granted') {
+                        const req = await dir.requestPermission({ mode: 'readwrite' });
+                        if (req !== 'granted') dir = null;
+                    }
+                }
+                if (!dir) {
+                    const opts = { id: 'ncSchedule', mode: 'readwrite' };
+                    const near = await idbGetHandle('backupDir');
+                    if (near) opts.startIn = near;
+                    dir = await window.showDirectoryPicker(opts);
+                    await idbSetHandle(dir, 'scheduleDir');
+                }
+                let sub = dir;
+                const made = [];
+                for (const part of (pathParts || []).filter(Boolean)) {
+                    if (String(sub.name || '').toLowerCase() === part.toLowerCase()) continue; // napili na mismo ang folder na ito
+                    sub = await sub.getDirectoryHandle(part, { create: true });
+                    made.push(part);
+                }
+                let saved = 0;
+                for (const f of files) {
+                    const fh = await sub.getFileHandle(f.name, { create: true });
+                    const w = await fh.createWritable();
+                    await w.write(f.blob);
+                    await w.close();
+                    saved++;
+                }
+                lastSaveFolderName = sub.name || '';
+                return { where: 'folder', folder: [dir.name || 'schedule', ...made].join('\\'), saved };
+            } catch (e) {
+                files.forEach(f => downloadBlobFallback(f.name, f.blob));
+                return { where: 'download', folder: '', saved: files.length, error: e.message };
+            }
+        }
+
         async function exportData() {
             const data = {
                 exportDate: new Date().toISOString(),
@@ -1474,10 +1576,24 @@
 
         // Export to Excel with colored grids and separate sheets per category
 
-        // ==================== v33: mga estudyante sa Excel export ====================
-        // Tatlong sheet: "Student Parts" (lahat ng bahagi ayon sa petsa), "Students Grid" (bawat tao × linggo, BR/ST/AS),
-        // "Students Summary" (ilang beses estudyante / assistant, huling bahagi, ilang linggo nang naghihintay).
+        // ==================== v42: Students Grid LANG (color-coded bawat bahagi + legend) ====================
+        // Isang sheet: bawat tao × linggo. Ang code sa cell = uri ng bahagi (BR/SC/FL/MD/EB/T);
+        // (code) naka-italic + maputlang kulay = partner/assistant. May Role column (Elder/MS/Pub) at legend sa itaas.
         const XL_GOLD = 'BE8900', XL_GOLD_DARK = '92400E', XL_GOLD_PALE = 'FEF3C7', XL_NAVY = '1E3A5F';
+        const STU_GRID_CODE = {
+            bible:       { code: 'BR', label: 'Bible Reading',             bg: 'DBEAFE', fg: '1E3A8A' },
+            initial:     { code: 'SC', label: 'Starting a Conversation',   bg: 'DCFCE7', fg: '166534' },
+            returnVisit: { code: 'FL', label: 'Following Up',              bg: 'CCFBF1', fg: '115E59' },
+            study:       { code: 'MD', label: 'Making Disciples',          bg: 'EDE9FE', fg: '5B21B6' },
+            explainDemo: { code: 'EB', label: 'Explaining Beliefs',        bg: 'FFEDD5', fg: '9A3412' },
+            explainTalk: { code: 'EB', label: 'Explaining Beliefs',        bg: 'FFEDD5', fg: '9A3412' },
+            talk:        { code: 'T',  label: 'Talk',                      bg: 'FFE4E6', fg: '9F1239' },
+            unknown:     { code: '?',  label: 'Unrecognized part',         bg: 'F3F4F6', fg: '6B7280' }
+        };
+        const STU_GRID_LEGEND = [
+            STU_GRID_CODE.bible, STU_GRID_CODE.initial, STU_GRID_CODE.returnVisit,
+            STU_GRID_CODE.study, STU_GRID_CODE.explainDemo, STU_GRID_CODE.talk
+        ];
         function xlCell(v, o = {}) {
             const isNum = typeof v === 'number';
             const c = { v: v ?? '', t: isNum ? 'n' : 's', s: {
@@ -1489,6 +1605,12 @@
             return c;
         }
         function xlDate(d) { return new Date(d + 'T12:00:00+08:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
+        function xlPale(hex) {
+            const n = parseInt(hex, 16); let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+            r = Math.round(r + (255 - r) * 0.55); g = Math.round(g + (255 - g) * 0.55); b = Math.round(b + (255 - b) * 0.55);
+            return ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0').toUpperCase();
+        }
+        function roleAbbr(atas) { return atas === 'Elder' ? 'Elder' : atas === 'MS' ? 'MS' : atas === 'Publisher' ? 'Pub' : atas === 'UB-Publisher' ? 'Pub' : ''; }
         function studentExcelWeeks() {
             return Object.keys(meetingEditorData).map(k => (k.match(/^week_(\d{4}-\d{2}-\d{2})$/) || [])[1]).filter(Boolean).sort()
                 .filter(d => { const md = meetingEditorData[getMeetingEditorKey(d)] || {};
@@ -1499,64 +1621,8 @@
             if (typeof XLSX === 'undefined') return res;
             const weeks = studentExcelWeeks();
             const today = manilaTodayISO(), nowThu = thursdayOfWeek(today);
-            const roleOf = p => (p ? (p.gender === 'Brother' || p.gender === 'Sister' ? p.gender : '') : '');
-            const nameOf = (id, typed) => { const p = id ? getPerson(id) : null; return p ? personLabel(p) : (typed || '').trim(); };
-
-            // ---- 1. Student Parts (talaan ayon sa petsa) ----
-            const rows = [];
-            rows.push([xlCell('Student Parts — Our Christian Life and Ministry', { bg: XL_GOLD, fg: 'FFFFFF', b: 1, sz: 13 })]);
-            rows.push(['Thursday', '#', 'Part', 'Title (workbook)', 'Student', 'Assistant', 'Note'].map(h => xlCell(h, { bg: XL_NAVY, fg: 'FFFFFF', b: 1, al: 'center' })));
-            const merges = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }];
-            let lastMonth = '';
-            // lumipas na linggo na walang kahit isang pangalan (hal. test data bago ang kongregasyon) — hindi na isasama
             const anyName = md => !!((md.bibleReadingName || '').trim() || (md.ministryParts || []).some(p => (p.name || '').trim() || (p.assistant || '').trim()));
-            weeks.filter(d => d >= nowThu || isNoMeetingWeek(d) || anyName(meetingEditorData[getMeetingEditorKey(d)] || {})).forEach(d => {
-                const ym = d.slice(0, 7);
-                if (ym !== lastMonth) {
-                    lastMonth = ym;
-                    const label = new Date(d + 'T12:00:00+08:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toUpperCase();
-                    rows.push([xlCell(label, { bg: XL_GOLD_PALE, fg: XL_GOLD_DARK, b: 1 }), ...Array(6).fill(0).map(() => xlCell('', { bg: XL_GOLD_PALE }))]);
-                    merges.push({ s: { r: rows.length - 1, c: 0 }, e: { r: rows.length - 1, c: 6 } });
-                }
-                const past = d < nowThu;
-                const zebra = past ? 'F3F4F6' : 'FFFFFF', dim = past ? '6B7280' : '111827';
-                const md = meetingEditorData[getMeetingEditorKey(d)] || {};
-                if (isNoMeetingWeek(d)) {
-                    rows.push([xlCell(xlDate(d), { bg: zebra, fg: dim, b: 1 }), xlCell('', { bg: zebra }), xlCell('No meeting', { bg: zebra, fg: dim, i: 1 }),
-                        xlCell(String(weekTypeText(d) || ''), { bg: zebra, fg: dim, i: 1 }), xlCell('', { bg: zebra }), xlCell('', { bg: zebra }), xlCell('', { bg: zebra })]);
-                    return;
-                }
-                const line = (no, part, title, stu, asst, note) => {
-                    rows.push([xlCell(xlDate(d), { bg: zebra, fg: dim, b: 1 }), xlCell(no, { bg: zebra, fg: dim, al: 'center' }), xlCell(part, { bg: zebra, fg: dim }),
-                        xlCell(title, { bg: zebra, fg: dim }), xlCell(stu || '—', { bg: stu ? zebra : 'FEF2F2', fg: stu ? dim : 'B91C1C', b: !!stu }),
-                        xlCell(asst, { bg: zebra, fg: dim }), xlCell(note || (past ? 'past' : ''), { bg: zebra, fg: note ? 'B45309' : '9CA3AF', i: 1 })]);
-                    if (stu) res.partCount++;
-                };
-                line(3, 'Bible Reading', ['Pagbabasa ng Bibliya', md.bibleReading].filter(Boolean).join(' — '), nameOf(md.bibleReadingId, md.bibleReadingName), '',
-                    (md.bibleReadingName || '').trim() ? '' : (past ? '' : 'no name yet'));
-                (md.ministryParts || []).forEach((p, i) => {
-                    const kind = getPartKind(p), K = STUDENT_KINDS[kind] || STUDENT_KINDS.unknown;
-                    const stu = nameOf(p.studentId, p.name);
-                    const asst = K.assistant ? nameOf(p.assistantId, p.assistant) : '';
-                    let note = '';
-                    if (kind === 'discussion') note = 'Elder/MS (not a student part)';
-                    else if (!stu && !past) note = 'no name yet';
-                    else if (K.assistant && stu && !asst && !past) note = 'no assistant yet';
-                    if (kind === 'discussion') {
-                        rows.push([xlCell(xlDate(d), { bg: zebra, fg: dim, b: 1 }), xlCell(partNumberOf(p.title, 4 + i), { bg: zebra, fg: dim, al: 'center' }), xlCell('Discussion', { bg: zebra, fg: dim }),
-                            xlCell(titleText(p.title), { bg: zebra, fg: dim }), xlCell(stu, { bg: zebra, fg: dim }), xlCell('', { bg: zebra }), xlCell(note, { bg: zebra, fg: '6B7280', i: 1 })]);
-                        return;
-                    }
-                    line(partNumberOf(p.title, 4 + i), K.short, titleText(p.title), stu, asst, note);
-                });
-            });
-            const ws1 = XLSX.utils.aoa_to_sheet(rows);
-            ws1['!cols'] = [{ wch: 14 }, { wch: 4 }, { wch: 24 }, { wch: 52 }, { wch: 26 }, { wch: 26 }, { wch: 26 }];
-            ws1['!merges'] = merges;
-            ws1['!freeze'] = { xSplit: 0, ySplit: 2 };
-            ws1['!views'] = [{ state: 'frozen', ySplit: 2 }];
 
-            // ---- 2. Students Grid (tao × linggo) ----
             const hist = buildStudentHistory();
             const meetWeeks = weeks.filter(d => !isNoMeetingWeek(d) && (d >= nowThu || anyName(meetingEditorData[getMeetingEditorKey(d)] || {})));
             const inRotation = p => p.active !== false && p.gender && (p.atas !== 'Elder' || studentSettings.includeElders);
@@ -1564,10 +1630,35 @@
             const sortP = (a, b) => (a.gender === b.gender ? 0 : a.gender === 'Brother' ? -1 : 1) || personLabel(a).localeCompare(personLabel(b));
             pool.sort(sortP);
             res.personCount = pool.length;
-            const g = [];
-            g.push([xlCell('Students Grid — BR = Bible Reading · ST = Student · AS = Assistant', { bg: XL_GOLD, fg: 'FFFFFF', b: 1 })]);
-            const monthRow = [xlCell('Name', { bg: XL_NAVY, fg: 'FFFFFF', b: 1 }), xlCell('', { bg: XL_NAVY })];
-            const dayRow = [xlCell('', { bg: XL_NAVY }), xlCell('B/S', { bg: XL_NAVY, fg: 'FFFFFF', b: 1, al: 'center' })];
+
+            const nCols = 3 + meetWeeks.length + 2;              // Name, B/S, Role, weeks, Student, Assistant
+            const last = nCols - 1;
+            const g = [], merges = [];
+            const mergeFull = r => merges.push({ s: { r, c: 0 }, e: { r, c: last } });
+            const mergeFrom = (r, c) => merges.push({ s: { r, c }, e: { r, c: last } });
+
+            // --- Title ---
+            const congName = (meetingSettings.congName || '').trim() || 'Students Grid';
+            g.push([xlCell(`Students Grid \u2014 ${congName}`, { bg: XL_GOLD, fg: 'FFFFFF', b: 1, sz: 13 })]); mergeFull(g.length - 1);
+            // --- Legend ---
+            g.push([xlCell("LEGEND \u2014 cell shows the person's part that week. (AST) = served as PARTNER/assistant.", { bg: XL_GOLD_PALE, fg: XL_GOLD_DARK, b: 1 })]); mergeFull(g.length - 1);
+            for (let i = 0; i < STU_GRID_LEGEND.length; i += 3) {
+                const row = []; let c = 0;
+                STU_GRID_LEGEND.slice(i, i + 3).forEach(k => {
+                    row.push(xlCell(k.code, { bg: k.bg, fg: k.fg, b: 1, al: 'center' }));
+                    row.push(xlCell(k.label, {})); row.push(xlCell('', {})); row.push(xlCell('', {}));
+                    merges.push({ s: { r: g.length, c: c + 1 }, e: { r: g.length, c: c + 3 } });
+                    c += 4;
+                });
+                g.push(row);
+            }
+            g.push([xlCell('(AST)', { bg: 'E5E7EB', fg: '374151', i: 1, al: 'center' }), xlCell('= served as partner / assistant that week (part type not shown)', {})]); mergeFrom(g.length - 1, 1);
+            g.push([xlCell('Role', { bg: 'E5E7EB', fg: '374151', b: 1, al: 'center' }), xlCell('Elder / MS / Pub \u2014 congregation role in its own column (Elder & MS tinted)', {})]); mergeFrom(g.length - 1, 1);
+            g.push([xlCell('', {})]);                            // blangkong hanay
+
+            // --- Header (month + day) ---
+            const monthRow = [xlCell('Name', { bg: XL_NAVY, fg: 'FFFFFF', b: 1 }), xlCell('', { bg: XL_NAVY }), xlCell('', { bg: XL_NAVY })];
+            const dayRow = [xlCell('', { bg: XL_NAVY }), xlCell('B/S', { bg: XL_NAVY, fg: 'FFFFFF', b: 1, al: 'center' }), xlCell('Role', { bg: XL_NAVY, fg: 'FFFFFF', b: 1, al: 'center' })];
             let pm = '';
             meetWeeks.forEach(d => {
                 const ym = d.slice(0, 7);
@@ -1577,67 +1668,49 @@
             });
             monthRow.push(xlCell('Student', { bg: XL_GOLD_DARK, fg: 'FFFFFF', b: 1, al: 'center' }), xlCell('Assistant', { bg: XL_GOLD_DARK, fg: 'FFFFFF', b: 1, al: 'center' }));
             dayRow.push(xlCell('', { bg: XL_GOLD_DARK }), xlCell('', { bg: XL_GOLD_DARK }));
+            const headTop = g.length;
             g.push(monthRow, dayRow);
-            let prevG = null;
-            pool.forEach((p, idx) => {
+
+            // --- Isa-isang tao ---
+            let prevG = null, zebra = 0;
+            pool.forEach(p => {
                 if (p.gender !== prevG) {
-                    prevG = p.gender;
+                    prevG = p.gender; zebra = 0;
                     g.push([xlCell(p.gender === 'Brother' ? 'BROTHERS' : p.gender === 'Sister' ? 'SISTERS' : 'NO BROTHER/SISTER SET', { bg: 'E5E7EB', fg: '374151', b: 1 })]);
+                    mergeFull(g.length - 1);
                 }
-                const bg = idx % 2 ? 'F9FAFB' : 'FFFFFF';
+                const bg = zebra++ % 2 ? 'F9FAFB' : 'FFFFFF';
                 const ev = hist[p.id] || [];
-                const row = [xlCell(personLabel(p) + (p.pioneer ? ' (RP)' : ''), { bg, b: 1 }), xlCell(p.gender === 'Brother' ? 'B' : p.gender === 'Sister' ? 'S' : '', { bg, al: 'center' })];
+                const roleBg = p.atas === 'Elder' ? 'DBEAFE' : p.atas === 'MS' ? 'CCFBF1' : bg;
+                const row = [xlCell(personLabel(p) + (p.pioneer ? ' (RP)' : ''), { bg, b: 1 }),
+                             xlCell(p.gender === 'Brother' ? 'B' : p.gender === 'Sister' ? 'S' : '', { bg, al: 'center' }),
+                             xlCell(roleAbbr(p.atas), { bg: roleBg, fg: '111827', b: p.atas === 'Elder' || p.atas === 'MS', al: 'center' })];
+                let sc = 0, as = 0;
                 meetWeeks.forEach(d => {
                     const e = ev.filter(x => x.date === d);
-                    const code = e.map(x => x.role === 'Assistant' ? 'AS' : x.kind === 'bible' ? 'BR' : 'ST').join('/');
-                    row.push(code ? xlCell(code, { bg: XL_GOLD_PALE, fg: XL_GOLD_DARK, b: 1, al: 'center' }) : xlCell('', { bg }));
+                    if (!e.length) { row.push(xlCell('', { bg })); return; }
+                    const parts = e.map(x => {
+                        const K = STU_GRID_CODE[x.kind] || STU_GRID_CODE.unknown;
+                        // v43: partner/assistant = neutral (AST), hindi na ipinapakita kung anong part
+                        if (x.role === 'Assistant') { as++; return { txt: '(AST)', bg: 'E5E7EB', fg: '374151', i: 1 }; }
+                        sc++; return { txt: K.code, bg: K.bg, fg: K.fg, i: 0 };
+                    });
+                    const main = parts[0];
+                    row.push(xlCell(parts.map(x => x.txt).join('/'), { bg: main.bg, fg: main.fg, b: !main.i, i: !!main.i, al: 'center' }));
                 });
-                row.push(xlCell(ev.filter(x => x.role === 'Estudyante').length, { bg: 'FFF7ED', fg: XL_GOLD_DARK, b: 1, al: 'center' }),
-                    xlCell(ev.filter(x => x.role === 'Assistant').length, { bg: 'FFF7ED', fg: XL_GOLD_DARK, al: 'center' }));
+                row.push(xlCell(sc || '', { bg: 'FFF7ED', fg: XL_GOLD_DARK, b: 1, al: 'center' }),
+                         xlCell(as || '', { bg: 'FFF7ED', fg: XL_GOLD_DARK, al: 'center' }));
                 g.push(row);
+                if (sc) res.partCount++;
             });
-            const ws2 = XLSX.utils.aoa_to_sheet(g);
-            ws2['!cols'] = [{ wch: 28 }, { wch: 5 }, ...meetWeeks.map(() => ({ wch: 5 })), { wch: 9 }, { wch: 10 }];
-            ws2['!views'] = [{ state: 'frozen', xSplit: 2, ySplit: 3 }];
 
-            // ---- 3. Students Summary ----
-            const s = [];
-            s.push([xlCell(`Students Summary — as of ${xlDate(today)}`, { bg: XL_GOLD, fg: 'FFFFFF', b: 1, sz: 13 })]);
-            s.push(['Name', 'B/S', 'RP', 'Role', 'As student', 'As assistant', 'Bible readings', 'Last student part', 'Weeks since', 'Next part', 'Status']
-                .map(h => xlCell(h, { bg: XL_NAVY, fg: 'FFFFFF', b: 1, al: 'center', wrap: true })));
-            const rowsS = pool.map(p => {
-                const ev = hist[p.id] || [];
-                const past = ev.filter(e => e.date <= today);
-                const lastStu = past.find(e => e.role === 'Estudyante') || null;
-                const next = [...ev].reverse().find(e => e.date > today) || null;
-                const wait = lastStu ? weeksBetween(lastStu.date, nowThu) : null;
-                let status = '', sbg = 'FFFFFF', sfg = '111827';
-                if (!inRotation(p)) { status = p.active === false ? 'inactive' : 'not in rotation'; sfg = '6B7280'; }
-                else if (!lastStu && !next) { status = '🔴 never had a part'; sbg = 'FEE2E2'; sfg = 'B91C1C'; }
-                else if (lastStu && !next && wait >= FAIR_WAIT_WEEKS) { status = `🟡 waiting ${wait} weeks`; sbg = 'FEF3C7'; sfg = '92400E'; }
-                else if (next) { status = 'scheduled'; sfg = '15803D'; }
-                return { p, ev, lastStu, next, wait, status, sbg, sfg };
-            });
-            rowsS.sort((a, b) => sortP(a.p, b.p));
-            rowsS.forEach((r, idx) => {
-                const bg = idx % 2 ? 'F9FAFB' : 'FFFFFF';
-                const kindName = e => e ? (e.kind === 'bible' ? 'Bible Reading' : (STUDENT_KINDS[e.kind]?.short || 'Student part')) : '';
-                s.push([xlCell(personLabel(r.p), { bg, b: 1 }), xlCell(roleOf(r.p), { bg, al: 'center' }), xlCell(r.p.pioneer ? 'RP' : '', { bg, al: 'center' }),
-                    xlCell(r.p.atas || '', { bg, al: 'center' }),
-                    xlCell(r.ev.filter(e => e.role === 'Estudyante').length, { bg, al: 'center', b: 1 }),
-                    xlCell(r.ev.filter(e => e.role === 'Assistant').length, { bg, al: 'center' }),
-                    xlCell(r.ev.filter(e => e.kind === 'bible').length, { bg, al: 'center' }),
-                    xlCell(r.lastStu ? `${xlDate(r.lastStu.date)} · ${kindName(r.lastStu)}` : '—', { bg }),
-                    xlCell(r.wait ?? '', { bg, al: 'center' }),
-                    xlCell(r.next ? `${xlDate(r.next.date)} · ${r.next.role === 'Assistant' ? 'Assistant' : kindName(r.next)}` : '', { bg }),
-                    xlCell(r.status, { bg: r.sbg, fg: r.sfg, b: 1 })]);
-            });
-            const ws3 = XLSX.utils.aoa_to_sheet(s);
-            ws3['!cols'] = [{ wch: 28 }, { wch: 8 }, { wch: 5 }, { wch: 13 }, { wch: 10 }, { wch: 11 }, { wch: 10 }, { wch: 34 }, { wch: 9 }, { wch: 34 }, { wch: 22 }];
-            ws3['!views'] = [{ state: 'frozen', ySplit: 2 }];
+            const ws = XLSX.utils.aoa_to_sheet(g);
+            ws['!cols'] = [{ wch: 28 }, { wch: 5 }, { wch: 7 }, ...meetWeeks.map(() => ({ wch: 6 })), { wch: 9 }, { wch: 10 }];
+            ws['!merges'] = merges;
+            ws['!views'] = [{ state: 'frozen', xSplit: 3, ySplit: headTop + 2 }];
 
-            res.hasData = res.partCount > 0 || people.length > 0;
-            if (res.hasData) res.sheets = [{ name: 'Students Summary', ws: ws3 }, { name: 'Student Parts', ws: ws1 }, { name: 'Students Grid', ws: ws2 }];
+            res.hasData = people.length > 0 || res.partCount > 0;
+            if (res.hasData) res.sheets = [{ name: 'Students Grid', ws }];
             return res;
         }
 
@@ -1713,7 +1786,7 @@
                 data.push([styledCell(typeLabel(type), colors.header, 'FFFFFF', true)]);
                 
                 // Header row 2: Month headers spanning multiple columns
-                const monthRow = [styledCell('Brother', '1E3A5F', 'FFFFFF', true)];
+                const monthRow = [styledCell('Brother', '1E3A5F', 'FFFFFF', true), styledCell('Role', '1E3A5F', 'FFFFFF', true)];
                 Object.keys(weeksByMonth).sort().forEach(monthKey => {
                     const [year, month] = monthKey.split('-');
                     const monthName = new Date(year, parseInt(month) - 1).toLocaleString('en-US', { month: 'short', year: 'numeric' });
@@ -1726,7 +1799,7 @@
                 data.push(monthRow);
                 
                 // Header row 3: Week dates
-                const weekRow = [styledCell('', '1E3A5F', 'FFFFFF', true)];
+                const weekRow = [styledCell('', '1E3A5F', 'FFFFFF', true), styledCell('', '1E3A5F', 'FFFFFF', true)];
                 allWeeks.forEach(week => {
                     const [, , day] = week.split('-');
                     weekRow.push(styledCell(day, '1E3A5F', 'FFFFFF', true));
@@ -1734,13 +1807,16 @@
                 data.push(weekRow);
                 
                 // Data rows: one per brother
-                const sortedBrothers = [...sheetBrothers].sort((a, b) => a.name.localeCompare(b.name));
+                const sortedBrothers = [...sheetBrothers].sort((a, b) => brotherPrivRank(a) - brotherPrivRank(b) || a.name.localeCompare(b.name));
                 sortedBrothers.forEach((brother, idx) => {
                     const row = [];
                     const rowBg = idx % 2 === 0 ? 'FFFFFF' : 'F9FAFB';
                     
                     // Brother name
                     row.push(styledCell(brother.name, rowBg, '111827', true));
+                    // v42: Role (Elder / MS / Bro) — tinted for Elder & MS
+                    const cat = getBrotherCategory(brother);
+                    row.push(styledCell(cat === 'Elder' ? 'Elder' : cat === 'MS' ? 'MS' : 'Pub', cat === 'Elder' ? 'DBEAFE' : cat === 'MS' ? 'CCFBF1' : rowBg, '111827', cat !== 'Brother'));
                     
                     // Find last assignment date for this brother & type (for trail)
                     const brotherTypeAssignments = typeAssignments.filter(a => a.brotherId === brother.id);
@@ -1770,7 +1846,7 @@
                 const ws = XLSX.utils.aoa_to_sheet(data);
                 
                 // Set column widths
-                const colWidths = [{ wch: 25 }]; // Brother name column
+                const colWidths = [{ wch: 25 }, { wch: 7 }]; // Brother + Role
                 allWeeks.forEach(() => colWidths.push({ wch: 5 })); // Week columns
                 ws['!cols'] = colWidths;
                 
@@ -1785,7 +1861,7 @@
             summaryData.push([styledCell('', 'FFFFFF')]);
             
             // Header
-            const summaryHeader = [styledCell('Brother', '374151', 'FFFFFF', true)];
+            const summaryHeader = [styledCell('Brother', '374151', 'FFFFFF', true), styledCell('Role', '374151', 'FFFFFF', true)];
             ASSIGNMENT_TYPES.forEach(type => {
                 const colors = typeColors[type] || { bg: 'F3F4F6', header: '374151' };
                 summaryHeader.push(styledCell(typeLabel(type), colors.header, 'FFFFFF', true));
@@ -1794,11 +1870,14 @@
             summaryData.push(summaryHeader);
             
             // Brother rows
-            const sortedBrothers = [...brothers].sort((a, b) => a.name.localeCompare(b.name));
+            const sortedBrothers = [...brothers].sort((a, b) => brotherPrivRank(a) - brotherPrivRank(b) || a.name.localeCompare(b.name));
             sortedBrothers.forEach((brother, idx) => {
                 const row = [];
                 const rowBg = idx % 2 === 0 ? 'FFFFFF' : 'F9FAFB';
                 row.push(styledCell(brother.name, rowBg, '111827', true));
+                // v42: Role (Elder / MS / Bro) — tinted for Elder & MS
+                const cat = getBrotherCategory(brother);
+                row.push(styledCell(cat === 'Elder' ? 'Elder' : cat === 'MS' ? 'MS' : 'Pub', cat === 'Elder' ? 'DBEAFE' : cat === 'MS' ? 'CCFBF1' : rowBg, '111827', cat !== 'Brother'));
                 
                 let total = 0;
                 ASSIGNMENT_TYPES.forEach(type => {
@@ -1815,7 +1894,7 @@
             });
             
             const summaryWs = XLSX.utils.aoa_to_sheet(summaryData);
-            const summaryColWidths = [{ wch: 25 }];
+            const summaryColWidths = [{ wch: 25 }, { wch: 7 }];
             ASSIGNMENT_TYPES.forEach(() => summaryColWidths.push({ wch: 12 }));
             summaryColWidths.push({ wch: 8 });
             summaryWs['!cols'] = summaryColWidths;
@@ -1875,6 +1954,7 @@
                     // Import the data
                     brothers = data.brothers || [];
                     assignments = data.assignments || [];
+                    ensurePamSlots(); // v62
                     sundayAssignments = data.sundayAssignments || [];
                     brotherEligibility = data.brotherEligibility || {};
                     // v1.1+: roster, schedule/student parts, at settings (hindi gagalawin kung wala sa lumang backup)
@@ -1980,6 +2060,58 @@
             localStorage.setItem('nc_meetingEditorData', JSON.stringify(meetingEditorData));
         }
 
+        // v51: persistent workbook-detail lookup — hindi nawawala, hindi umaasa sa re-import ng eksaktong buwan.
+        // Key: Huwebes ng linggo → { malinis na pamagat (lowercase) → detail/context line }.
+        let wbDetails = {};
+        function saveWbDetails() { localStorage.setItem('nc_wbDetails', JSON.stringify(wbDetails)); }
+        function loadWbDetails() { try { wbDetails = JSON.parse(localStorage.getItem('nc_wbDetails') || '{}'); } catch (e) { wbDetails = {}; } }
+        function wbDetailKeyTitle(title) { return String(title || '').toLowerCase().replace(/\s+/g, ' ').trim(); } // buong pamagat (kasama ang minuto) para magkaiba ang dalawang magkaparehong-pangalan na bahagi sa isang linggo
+        // v57: ang value ay string (isang bahagi) o array (parehong pamagat nang 2+ beses sa isang linggo, ayon sa pagkakasunod)
+        function wbPick(v, occ) { occ = occ || 0; if (Array.isArray(v)) return v[occ] || ''; return occ === 0 ? (v || '') : ''; }
+        function wbDetailFor(thursday, title, occ) {
+            const k = wbDetailKeyTitle(title);
+            // v57: unahin ang naka-embed na WB_CONTEXT (lib/wb-context.js — laging tama), saka ang runtime import (wbDetails)
+            if (typeof WB_CONTEXT !== 'undefined' && WB_CONTEXT[thursday]) { const a = wbPick(WB_CONTEXT[thursday][k], occ); if (a) return a; }
+            const live = wbDetails[thursday]; const b = live ? wbPick(live[k], occ) : ''; if (b) return b;
+            return '';
+        }
+        // Pang-ilang bahagi ito sa linggo na may parehong pamagat (0 = una)
+        function partOccurrence(parts, i) {
+            const k = wbDetailKeyTitle((parts[i] || {}).title); let n = 0;
+            for (let j = 0; j < i; j++) if (wbDetailKeyTitle((parts[j] || {}).title) === k) n++;
+            return n;
+        }
+        // Context ng ministry part i: galing sa workbook muna, saka ang kopyang naka-save sa bahagi
+        function partContext(thursday, parts, i) {
+            const p = parts[i] || {};
+            return wbDetailFor(thursday, p.title, partOccurrence(parts, i)) || p.detail || '';
+        }
+        // {pamagat: detail} o {pamagat: [d1, d2]} kapag umuulit ang pamagat
+        function wbBucketFrom(list) {
+            const b = {};
+            (list || []).forEach(pp => {
+                if (!pp || !pp.detail) return;
+                const k = wbDetailKeyTitle(pp.title);
+                b[k] = b[k] === undefined ? pp.detail : [].concat(b[k], pp.detail);
+            });
+            return b;
+        }
+        // v57: gawing "Chairman's talk" ang mga bahaging "Pahayag ng chairman" ayon sa workbook (maliban kung pinalitan mismo ng user)
+        function applyChairmanTalkKinds() {
+            let changed = 0;
+            Object.keys(meetingEditorData).forEach(key => {
+                const m = key.match(/^week_(\d{4}-\d{2}-\d{2})$/);
+                if (!m) return;
+                const parts = (meetingEditorData[key] || {}).ministryParts || [];
+                parts.forEach((p, i) => {
+                    if (!p || p.kindManual || p.kind === 'chairman') return;
+                    if (isChairmanTalkText(partContext(m[1], parts, i))) { p.kind = 'chairman'; changed++; }
+                });
+            });
+            if (changed) saveMeetingEditorData();
+            return changed;
+        }
+
         function loadMeetingEditorData() {
             const saved = localStorage.getItem('nc_meetingEditorData');
             if (saved) {
@@ -1987,6 +2119,8 @@
                 // v11: alisin ang mga sirang key (hal. "week_NaN-NaN-NaN") mula sa lumang bersyon
                 Object.keys(meetingEditorData).forEach(k => { if (/^week_/.test(k) && !/^week_\d{4}-\d{2}-\d{2}$/.test(k)) delete meetingEditorData[k]; });
             }
+            loadWbDetails();
+            applyChairmanTalkKinds();
         }
 
         function updateMeetingField(weekDate, field, value) {
@@ -2069,198 +2203,119 @@
             return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         }
 
+        // ==================== v60: Schedule Editor na kamukha ng S-140 ====================
+        // Iisang hanay bawat linggo (oras | bahagi | label | pangalan), parehong pagkakasunod, oras at kulay ng S-140 PDF
+        // (galing sa buildWeekModel). Naie-edit sa mismong puwesto ang pamagat, awit, at pangalan ng estudyante;
+        // ang mga atas ng brother (Chairman, panalangin, 10-min talk, atbp.) ay galing sa Assignments tab.
+        function seEsc(v) { return escHtml(v == null ? '' : v); }
+        function seRerender() { const y = window.scrollY; renderPdfEditor(); window.scrollTo(0, y); }
+        function seTitleInput(thursday, where, i, value, ph) {
+            return `<textarea class="se-in se-title" rows="1" oninput="autoResizeTextarea(this)" onchange="seEditTitle('${thursday}', '${where}', ${i}, this.value)" placeholder="${seEsc(ph)}">${escNewlines(value || '')}</textarea>`;
+        }
+        function seNameInput(onchange, value, ph) {
+            return `<input type="text" class="se-in se-namein" value="${seEsc(value)}" onchange="${onchange}" placeholder="${seEsc(ph)}">`;
+        }
+        // Pagpalit ng pamagat: kapag nagbago ang minuto, kinukuwenta ulit ang oras ng buong linggo
+        function seEditTitle(thursday, where, i, value) {
+            const md = meetingEditorData[getMeetingEditorKey(thursday)] || {};
+            let old = '';
+            if (where === 'part1') { old = md.part1Title; updateMeetingField(thursday, 'part1Title', value); }
+            else if (where === 'ministry') { old = ((md.ministryParts || [])[i] || {}).title; updateMinistryPart(thursday, i, 'title', value); }
+            else if (where === 'living') { old = md['pamumuhayTitle' + i]; updateMeetingField(thursday, 'pamumuhayTitle' + i, value); }
+            else if (where === 'livingExtra') { old = ((md.livingParts || [])[i] || {}).title; updateLivingPart(thursday, i, 'title', value); }
+            if (titleMinutes(old) !== titleMinutes(value) || (where === 'living' && isLocalNeedsTitle(old) !== isLocalNeedsTitle(value))) seRerender();
+        }
+        function seWeekHtml(thursday) {
+            const m = buildWeekModel(thursday);
+            const md = meetingEditorData[getMeetingEditorKey(thursday)] || {};
+            const parts = md.ministryParts || [];
+            const EM = '<span class="se-empty" title="Assign this in the Assignments tab">—</span>';
+            const plain = v => (String(v || '').trim() ? seEsc(v) : EM);
+            let h = `<div class="se-week${m.noMeeting ? ' se-nomtg' : ''}">`;
+            h += `<div class="se-head">
+                <div class="se-date"><span>${seEsc(m.dateLabel)}</span><span class="se-pipe">|</span>
+                    <input type="text" class="se-in se-bible" value="${seEsc(md.bibleReading || '')}" onchange="updateMeetingField('${thursday}', 'bibleReading', this.value)" placeholder="Bible reading">
+                    ${m.type === 'co' ? '<span class="se-co">· DALAW NG TAGAPANGASIWA NG SIRKITO</span>' : ''}</div>
+                ${m.noMeeting ? '' : `<div class="se-lbl">Chairman:</div><div class="se-name">${plain(m.chairman)}</div>`}
+            </div>`;
+            h += `<div class="se-wt">${renderWeekTypeControls(thursday)}</div>`;
+            if (m.noMeeting) {
+                return h + `<div class="se-nomtg-bar">WALANG PULONG${m.reasonTG ? ' — ' + seEsc(m.reasonTG.toUpperCase()) : ''}</div></div>`;
+            }
+            const BAR = { kayaman: ['KAYAMANAN MULA SA SALITA NG DIYOS', 'se-k'], ministry: ['MAGING MAHUSAY SA MINISTERYO', 'se-m'], living: ['PAMUMUHAY BILANG KRISTIYANO', 'se-l'] };
+            const bar = key => `<div class="se-row se-barrow"><div class="se-bar ${BAR[key][1]}">${BAR[key][0]}</div></div>`;
+            const addRow = (fn, note) => `<div class="se-row se-addrow"><div></div><div class="se-tcell">${note ? `<span class="se-note">${note}</span>` : ''}<button class="se-add" onclick="${fn}('${thursday}')">+ Add part</button></div></div>`;
+            const lastMin = m.rows.map(r => r.sec).lastIndexOf('ministry');
+            let lastLiv = -1;
+            m.rows.forEach((r, k) => { if (r.ed && (r.ed.t === 'living' || r.ed.t === 'livingExtra')) lastLiv = k; });
+            let sec = '';
+            m.rows.forEach((r, k) => {
+                if (r.sec !== sec) {
+                    if (r.sec === 'living' && lastMin < 0) h += bar('ministry') + addRow('addMinistryPart', 'No parts yet — use 📥 Import Workbook, or');
+                    sec = r.sec;
+                    if (BAR[sec]) h += bar(sec);
+                }
+                const ed = r.ed || {};
+                const num = r.num ? `<span class="se-num">${r.num}.</span>` : '';
+                const minTxt = r.dispMin ? ` <span class="se-min">(${r.dispMin} min.)</span>` : '';
+                let title, label = r.label || '', names = '', x = '', ctx = '';
+                if (ed.t === 'song') {
+                    title = `<span>Awit</span><input type="text" class="se-in se-song" value="${seEsc(md[ed.f] || '')}" onchange="updateMeetingField('${thursday}', '${ed.f}', this.value)" placeholder="#">`;
+                } else if (ed.t === 'part1') {
+                    title = num + seTitleInput(thursday, 'part1', 0, md.part1Title, 'Title (10 min.)');
+                } else if (ed.t === 'ministry') {
+                    title = num + seTitleInput(thursday, 'ministry', ed.i, (parts[ed.i] || {}).title, 'Title (3 min.)');
+                } else if (ed.t === 'living') {
+                    title = num + seTitleInput(thursday, 'living', ed.i, md['pamumuhayTitle' + ed.i] || '', 'Title (15 min.)');
+                } else if (ed.t === 'livingExtra') {
+                    title = num + seTitleInput(thursday, 'livingExtra', ed.i, ((md.livingParts || [])[ed.i] || {}).title, 'Title (5 min.)');
+                } else {
+                    title = num + `<span>${seEsc(r.text)}${minTxt}</span>`;
+                }
+                if (ed.t === 'bible') {
+                    names = seNameInput(`updateMeetingField('${thursday}', 'bibleReadingName', this.value)`, md.bibleReadingName || '', 'Student');
+                } else if (ed.t === 'ministry') {
+                    const p = parts[ed.i] || {};
+                    const kind = getPartKind(p), K = STUDENT_KINDS[kind] || STUDENT_KINDS.unknown;
+                    if (kind === 'chairman') {
+                        names = `<span class="se-chair" title="Chairman's talk — the chairman gives this part. No student, no S-89 slip.">🎤 ${plain(m.chairman)}</span>`;
+                    } else {
+                        names = seNameInput(`updateMinistryPart('${thursday}', ${ed.i}, 'name', this.value)`, p.name || '', kind === 'discussion' ? 'Elder / MS' : 'Student');
+                        if (K.assistant) names += `<span class="se-slash">/</span>` + seNameInput(`updateMinistryPart('${thursday}', ${ed.i}, 'assistant', this.value)`, p.assistant || '', 'Assistant');
+                    }
+                    if (!isLeaderKind(kind)) ctx = partContext(thursday, parts, ed.i);
+                    if (parts.length > 1) x = `<button class="se-x" title="Remove this part" onclick="removeMinistryPart('${thursday}', ${ed.i})">✕</button>`;
+                } else if (ed.t === 'livingExtra') {
+                    names = seNameInput(`updateLivingPart('${thursday}', ${ed.i}, 'name', this.value)`, ((md.livingParts || [])[ed.i] || {}).name || '', 'Name');
+                    x = `<button class="se-x" title="Remove this part" onclick="removeLivingPart('${thursday}', ${ed.i})">✕</button>`;
+                } else if ('names' in r) {
+                    names = r.names === 'TBA' ? '<span class="se-tba" title="Local Needs — no one assigned yet">TBA</span>' : plain(r.names);
+                }
+                h += `<div class="se-row${x ? ' se-has-x' : ''}">
+                    <div class="se-time">${seEsc(r.time)}</div>
+                    <div class="se-tcell">${title}${ctx ? `<div class="se-ctx" title="From the workbook — the context of this part">↳ ${seEsc(ctx)}</div>` : ''}</div>
+                    <div class="se-lbl">${seEsc(label)}</div>
+                    <div class="se-name">${names}${x}</div>
+                </div>`;
+                if (k === lastMin) h += addRow('addMinistryPart');
+                if (k === lastLiv) h += addRow('addLivingPart');
+            });
+            return h + renderWeekTimingSummary(thursday) + `</div>`;
+        }
         function renderPdfEditor() {
             loadMeetingEditorData();
-
             const monthStr = document.getElementById('monthSelect').value;
             const [year, month] = monthStr.split('-').map(Number);
             const monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-            const monthNamesShort = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
             document.getElementById('pdfMonthYearLabel').textContent = `${monthNames[month]} ${year}`;
             const congHeader = document.getElementById('congNameHeader');
             if (congHeader) congHeader.textContent = meetingSettings.congName ? meetingSettings.congName.toUpperCase() : '[PANGALAN NG KONGREGASYON]';
             renderMeetingSettingsPanel();
             renderSpecialWeeksPanel();
-
             const thursdays = getThursdaysForMonthByWeekStart(year, month);
             const container = document.getElementById('meetingWeeksContainer');
-            let html = '';
-
-            // em-dash placeholder for unassigned names
-            const EM = '<em style="color:#999;">—</em>';
-
-            thursdays.forEach((thursday, weekIdx) => {
-                const thursdayDate = new Date(thursday + 'T12:00:00+08:00');
-                const weekStart = new Date(thursdayDate); weekStart.setDate(thursdayDate.getDate() - 3);
-                const weekEnd = new Date(thursdayDate); weekEnd.setDate(thursdayDate.getDate() + 3);
-                const startDay = weekStart.getDate(), endDay = weekEnd.getDate();
-                const startMonth = weekStart.getMonth() + 1, endMonth = weekEnd.getMonth() + 1;
-                const dateRange = startMonth === endMonth
-                    ? `${monthNamesShort[startMonth]} ${startDay}-${endDay}`
-                    : `${monthNamesShort[startMonth]} ${startDay} – ${monthNamesShort[endMonth]} ${endDay}`;
-
-                const openingPrayer = getAssignedBrother(thursday, 'Opening Prayer');
-                const chairman = getAssignedBrother(thursday, 'OCLM Chairman');
-                const tenMinTalk = getAssignedBrother(thursday, '10 mins talk');
-                const espirituwalHiyas = getAssignedBrother(thursday, 'Espiritual na Hiyas');
-                const pamumuhayBrothers = getAssignedBrothers(thursday, 'Pamumuhay');
-                const cbs = getAssignedBrother(thursday, 'CBS');
-                const cbsReader = getAssignedBrother(thursday, 'CBS Reader');
-                const closingPrayer = getAssignedBrother(thursday, 'Closing prayer');
-
-                const key = getMeetingEditorKey(thursday);
-                const ministryParts = meetingEditorData[key]?.ministryParts || [
-                    { title: '', name: '', assistant: '' },
-                    { title: '', name: '', assistant: '' },
-                    { title: '', name: '', assistant: '' }
-                ];
-                const livingParts = meetingEditorData[key]?.livingParts || [];
-
-                // small helper: name + optional assistant, joined with &
-                function nameAmp(name, assistant) {
-                    const n = name || EM;
-                    return assistant ? `${n} <span class="amp">&</span> ${assistant}` : n;
-                }
-
-                // ---- LEFT COLUMN: Kayamanan + (Awit) + Pamumuhay ----
-                let left = '';
-                left += `<div class="meeting-colsection-header mc-treasures">KAYAMANAN MULA SA SALITA NG DIYOS</div>`;
-                // Part 1 (10 min talk)
-                left += `<div class="meeting-part">
-                    <span class="meeting-part-number treasures">1.</span>
-                    <span class="meeting-part-title treasures">
-                        <textarea class="pdf-editor-input" style="width:90%;color:#0d9488;" rows="1" oninput="autoResizeTextarea(this)"
-                            onchange="updateMeetingField('${thursday}', 'part1Title', this.value)"
-                            placeholder="Part title (10 min.)">${escNewlines(getMeetingField(thursday, 'part1Title', ''))}</textarea>
-                    </span>
-                    <span class="meeting-part-name">${tenMinTalk || EM}</span>
-                </div>`;
-                // Part 2 Espiritwal
-                left += `<div class="meeting-part">
-                    <span class="meeting-part-number treasures">2.</span>
-                    <span class="meeting-part-title treasures">Espirituwal na Hiyas <span class="meeting-part-minutes">(10 min.)</span></span>
-                    <span class="meeting-part-name">${espirituwalHiyas || EM}</span>
-                </div>`;
-                // Part 3 Pagbabasa
-                left += `<div class="meeting-part">
-                    <span class="meeting-part-number treasures">3.</span>
-                    <span class="meeting-part-title treasures">Pagbabasa ng Bibliya <span class="meeting-part-minutes">(4 min.)</span></span>
-                    <span class="meeting-part-name"><input type="text" class="pdf-editor-name" value="${getMeetingField(thursday, 'bibleReadingName', '')}"
-                        onchange="updateMeetingField('${thursday}', 'bibleReadingName', this.value)" placeholder="Name"></span>
-                </div>`;
-                // Awit (middle song) + PAMUMUHAY header
-                left += `<div class="meeting-awit-inline">Awit: <input type="text" class="pdf-editor-input" style="width:36px;display:inline-block;"
-                        value="${getMeetingField(thursday, 'middleSong', '')}" onchange="updateMeetingField('${thursday}', 'middleSong', this.value)"></div>`;
-                left += `<div class="meeting-colsection-header mc-living">PAMUMUHAY BILANG KRISTIYANO</div>`;
-                // Pamumuhay parts (assigned brothers), numbering continues after ministry
-                const pamStart = 4 + ministryParts.length;
-                if (pamumuhayBrothers.length > 0) {
-                    pamumuhayBrothers.forEach((bn, i) => {
-                        left += `<div class="meeting-part">
-                            <span class="meeting-part-number living">${pamStart + i}.</span>
-                            <span class="meeting-part-title">
-                                <textarea class="pdf-editor-input" style="width:85%;" rows="1" oninput="autoResizeTextarea(this)"
-                                    onchange="updateMeetingField('${thursday}', 'pamumuhayTitle${i}', this.value)"
-                                    placeholder="Pamumuhay">${escNewlines(getMeetingField(thursday, 'pamumuhayTitle' + i, 'Pamumuhay'))}</textarea>
-                            </span>
-                            <span class="meeting-part-name">${bn || EM}</span>
-                        </div>`;
-                    });
-                } else {
-                    left += `<div class="meeting-part">
-                        <span class="meeting-part-number living">${pamStart}.</span>
-                        <span class="meeting-part-title">
-                            <textarea class="pdf-editor-input" style="width:85%;" rows="1" oninput="autoResizeTextarea(this)"
-                                onchange="updateMeetingField('${thursday}', 'pamumuhayTitle0', this.value)"
-                                placeholder="Pamumuhay">${escNewlines(getMeetingField(thursday, 'pamumuhayTitle0', 'Pamumuhay'))}</textarea>
-                        </span>
-                        <span class="meeting-part-name"><em style="color:#999;">— (assign)</em></span>
-                    </div>`;
-                }
-                // extra living parts
-                const livingStart = pamStart + Math.max(pamumuhayBrothers.length, 1);
-                livingParts.forEach((part, i) => {
-                    left += `<div class="meeting-part">
-                        <span class="meeting-part-number living">${livingStart + i}.</span>
-                        <span class="meeting-part-title">
-                            <textarea class="pdf-editor-input" style="width:85%;" rows="1" oninput="autoResizeTextarea(this)"
-                                onchange="updateLivingPart('${thursday}', ${i}, 'title', this.value)"
-                                placeholder="">${escNewlines(part.title || '')}</textarea>
-                        </span>
-                        <span class="meeting-part-name">
-                            <input type="text" class="pdf-editor-name" value="${part.name || ''}"
-                                onchange="updateLivingPart('${thursday}', ${i}, 'name', this.value)" placeholder="">
-                            <span class="remove-part-btn" onclick="removeLivingPart('${thursday}', ${i})">✕</span>
-                        </span>
-                    </div>`;
-                });
-                left += `<div class="add-part-btn" onclick="addLivingPart('${thursday}')">+ Add Living Part</div>`;
-                // CBS + Par. Reader
-                const cbsNum = livingStart + livingParts.length;
-                left += `<div class="meeting-part">
-                    <span class="meeting-part-number living">${cbsNum}.</span>
-                    <span class="meeting-part-title">Pag-aaral ng Kongregasyon sa Bibliya <span class="meeting-part-minutes">(30 min.)</span></span>
-                    <span class="meeting-part-name">${cbs || EM}</span>
-                </div>`;
-                left += `<div class="meeting-part">
-                    <span class="meeting-part-title"><strong>Par. Reader:</strong> ${cbsReader || EM}</span>
-                </div>`;
-
-                // ---- RIGHT COLUMN: Maging Mahusay ----
-                let right = '';
-                right += `<div class="meeting-colsection-header mc-ministry">MAGING MAHUSAY SA MINISTERYO</div>`;
-                right += ministryParts.map((part, i) => `
-                    <div class="meeting-part">
-                        <span class="meeting-part-number ministry">${4 + i}.</span>
-                        <span class="meeting-part-title">
-                            <textarea class="pdf-editor-input" style="width:85%;" rows="1" oninput="autoResizeTextarea(this)"
-                                onchange="updateMinistryPart('${thursday}', ${i}, 'title', this.value)"
-                                placeholder="">${escNewlines(part.title || '')}</textarea>
-                        </span>
-                        <span class="meeting-part-name meeting-part-pair">
-                            <input type="text" class="pdf-editor-name" style="min-width:70px;" value="${part.name || ''}"
-                                onchange="updateMinistryPart('${thursday}', ${i}, 'name', this.value)" placeholder="Name">
-                            <span class="amp">&</span>
-                            <input type="text" class="pdf-editor-name" style="min-width:70px;" value="${part.assistant || ''}"
-                                onchange="updateMinistryPart('${thursday}', ${i}, 'assistant', this.value)" placeholder="Assistant">
-                            ${ministryParts.length > 1 ? `<span class="remove-part-btn" onclick="removeMinistryPart('${thursday}', ${i})">✕</span>` : ''}
-                        </span>
-                    </div>`).join('');
-                right += `<div class="add-part-btn" onclick="addMinistryPart('${thursday}')">+ Add Ministry Part</div>`;
-
-                // ---- ASSEMBLE WEEK ----
-                html += `
-                <div class="meeting-week meeting-schedule">
-                    <div class="meeting-weekbar">
-                        <span>${dateRange}</span>
-                        <input type="text" class="pdf-editor-input scripture" style="width:150px;"
-                            value="${getMeetingField(thursday, 'bibleReading', '')}"
-                            onchange="updateMeetingField('${thursday}', 'bibleReading', this.value)" placeholder="JEREMIAS 45-46">
-                    </div>
-                    ${renderWeekTypeControls(thursday)}
-                    <div class="meeting-chairman-row">
-                        <span>Awit <input type="text" class="pdf-editor-input" style="width:34px;display:inline-block;"
-                            value="${getMeetingField(thursday, 'openingSong', '')}" onchange="updateMeetingField('${thursday}', 'openingSong', this.value)"></span>
-                        <span>Chairman: <strong>${chairman || EM}</strong></span>
-                        <span>Panalangin: <strong>${openingPrayer || EM}</strong></span>
-                    </div>
-                    <div class="meeting-2col">
-                        <div class="meeting-col">${left}</div>
-                        <div class="meeting-col">${right}</div>
-                    </div>
-                    <div class="meeting-footer">
-                        <span>Awit <input type="text" class="pdf-editor-input" style="width:34px;display:inline-block;"
-                            value="${getMeetingField(thursday, 'closingSong', '')}" onchange="updateMeetingField('${thursday}', 'closingSong', this.value)">
-                            &nbsp; Pangwakas na Komento ng Chairman <span class="meeting-part-minutes">(3 min.)</span></span>
-                        <span>Panalangin: <strong>${closingPrayer || EM}</strong></span>
-                    </div>
-                    ${renderWeekTimingSummary(thursday)}
-                </div>`;
-            });
-
-            container.innerHTML = html;
-            container.querySelectorAll('textarea.pdf-editor-input').forEach(autoResizeTextarea);
+            container.innerHTML = thursdays.length ? thursdays.map(seWeekHtml).join('<div class="se-sep"></div>') : '<div class="stu-empty">No weeks in this month.</div>';
+            container.querySelectorAll('textarea.se-in').forEach(el => { if (el.offsetParent !== null) autoResizeTextarea(el); });
         }
         // ==================== WORKBOOK IMPORT (EPUB) ====================
         const WB_MONTHS_TG = { 'ENERO':1,'PEBRERO':2,'MARSO':3,'ABRIL':4,'MAYO':5,'HUNYO':6,'HULYO':7,
@@ -2339,14 +2394,52 @@ function wbWeekToThursday(label, ctx) {
             for (const mm of html.matchAll(/<h3[^>]*data-pid="(\d+)"[^>]*>(.*?)<\/h3>/gs)) {
                 const pos = mm.index;
                 const title = wbStripTags(mm[2]);
-                const after = html.slice(mm.index + mm[0].length, mm.index + mm[0].length + 300);
+                const after = html.slice(mm.index + mm[0].length, mm.index + mm[0].length + 1500);
+                // v48: buong detail line (unang <p> sa ilalim ng pamagat, hanggang sa susunod na h3) — konteksto ng bahagi
+                const stopH3 = after.search(/<h3\b/);
+                const seg = stopH3 === -1 ? after : after.slice(0, stopH3);
+                const pm = seg.match(/<p\b[^>]*>([\s\S]*?)<\/p>/);
+                const detail = pm ? wbStripTags(pm[1]) : '';
                 const mIn = title.match(/\((\d+)\s*min\.?\)/);
-                const mAf = after.match(/\((\d+)\s*min\.?\)/);
+                const mAf = detail.match(/\((\d+)\s*min\.?\)/);
                 const minutes = mIn ? mIn[1] : (mAf ? mAf[1] : '');
                 const sec = pos < wheatI ? 'kayaman' : (pos < sheepI ? 'ministry' : 'living');
-                parts.push({ title, minutes, sec, note: wbStripTags(after).slice(0, 60) });
+                parts.push({ title, minutes, sec, note: detail, detail });
             }
             return { weekLabel, bible, songs, parts };
+        }
+
+        // v52: awtomatikong basahin ang mga naka-bundle na workbook EPUB sa workbooks/ para LAGING may context,
+        // hindi na umaasa sa manu-manong re-import ng tamang buwan. Pinupunan LANG ang wbDetails lookup — hindi
+        // ginagalaw ang assignments, pangalan, o meetingEditorData. Tumatakbo tuwing bubukas ang app.
+        const BUNDLED_WORKBOOKS = ['workbooks/mwb_TG_202609.epub', 'workbooks/mwb_TG_202611.epub', 'workbooks/mwb_TG_202701.epub', 'workbooks/mwb_TG_202703.epub'];
+        async function autoLoadBundledWorkbooks() {
+            if (typeof JSZip === 'undefined') return;
+            let added = 0;
+            for (const url of BUNDLED_WORKBOOKS) {
+                try {
+                    const resp = await fetch(url);
+                    if (!resp.ok) continue;
+                    const zip = await JSZip.loadAsync(await resp.arrayBuffer());
+                    const weekly = Object.keys(zip.files)
+                        .filter(n => /OEBPS\/\d{9}\.xhtml$/.test(n) && !n.includes('extracted') && !n.endsWith('400.xhtml'))
+                        .sort();
+                    let coverText = '';
+                    const opfName = Object.keys(zip.files).find(n => /\.opf$/i.test(n));
+                    if (opfName) { const o = await zip.files[opfName].async('string'); const t = o.match(/<dc:title[^>]*>([^<]*)/); if (t) coverText += t[1] + ' '; }
+                    const issue = wbIssueContext(url.split('/').pop(), coverText);
+                    for (const name of weekly) {
+                        const d = wbParseWeek(await zip.files[name].async('string'));
+                        const thu = wbWeekToThursday(d.weekLabel, issue);
+                        if (!thu) continue;
+                        const nb = wbBucketFrom(d.parts.filter(p => p.sec === 'ministry').map(p => ({ title: wbTitleWithMin(p.title, p.minutes), detail: p.detail }))
+                            .concat(d.parts.filter(p => p.sec === 'living' && /^\d+\./.test(p.title) && !/Pag-aaral ng Kongregasyon/i.test(p.title))
+                                .map(p => ({ title: 'living|' + wbTitleWithMin(p.title, p.minutes), detail: p.detail }))));
+                        if (JSON.stringify(nb) !== JSON.stringify(wbDetails[thu] || {})) { wbDetails[thu] = nb; added++; }
+                    }
+                } catch (e) { /* file:// o walang workbook — laktawan nang tahimik */ }
+            }
+            if (added) { saveWbDetails(); applyChairmanTalkKinds(); render(); }
         }
 
         async function handleWorkbookImport(event) {
@@ -2385,8 +2478,9 @@ function wbWeekToThursday(label, ctx) {
                         middleSong: d.songs[1] || '',
                         closingSong: d.songs[2] || '',
                         part1Title: part1 ? wbTitleWithMin(part1.title, part1.minutes) : '',
-                        ministryParts: ministry.map(p => ({ title: wbTitleWithMin(p.title, p.minutes), name: '', assistant: '', kind: detectPartKind(p.title, p.note) })),
-                        pamumuhayTitles: living.map(p => wbTitleWithMin(p.title, p.minutes))
+                        ministryParts: ministry.map(p => ({ title: wbTitleWithMin(p.title, p.minutes), name: '', assistant: '', kind: detectPartKind(p.title, p.note), detail: p.detail || '' })),
+                        pamumuhayTitles: living.map(p => wbTitleWithMin(p.title, p.minutes)),
+                        livingDetails: living.map(p => ({ title: 'living|' + wbTitleWithMin(p.title, p.minutes), detail: p.detail || '' }))
                     });
                 }
                 if (weeks.length === 0) { alert('No weekly schedules were found in this EPUB.'); return; }
@@ -2411,11 +2505,77 @@ function wbWeekToThursday(label, ctx) {
                     <div class="font-bold text-gray-900">${w.weekLabel} <span class="text-xs text-gray-500">(Thu ${nice(w.thursday)})</span></div>
                     <div class="text-xs text-gray-600 mb-1">${w.bibleReading} &bull; Awit ${w.openingSong}/${w.middleSong}/${w.closingSong}</div>
                     <div class="text-sm text-gray-800">1. ${w.part1Title}</div>
-                    ${w.ministryParts.map(p => `<div class="text-sm text-gray-700" style="padding-left:10px;">- ${p.title}</div>`).join('')}
+                    ${w.ministryParts.map(p => `<div class="text-sm text-gray-700" style="padding-left:10px;">- ${p.title}${p.detail ? `<div class="text-xs text-gray-500" style="padding-left:12px;font-style:italic;">↳ ${p.detail}</div>` : ''}</div>`).join('')}
                     ${w.pamumuhayTitles.map(t => `<div class="text-sm text-gray-700" style="padding-left:10px;">- ${t}</div>`).join('')}
                 </div>`;
             });
             container.innerHTML = html;
+        }
+
+        // v61: pinupunan ang mga BLANKONG field ng linggo mula sa workbook (pareho para sa Import at sa naka-bundle na workbook)
+        function mergeWorkbookWeeks(weeks) {
+            weeks.forEach(w => {
+                const key = getMeetingEditorKey(w.thursday);
+                if (!meetingEditorData[key]) meetingEditorData[key] = {};
+                const md = meetingEditorData[key];
+                const setIfEmpty = (field, val) => {
+                    if (val && (md[field] === undefined || md[field] === '' || md[field] === null)) md[field] = val;
+                };
+                setIfEmpty('bibleReading', w.bibleReading);
+                setIfEmpty('openingSong', w.openingSong);
+                setIfEmpty('middleSong', w.middleSong);
+                setIfEmpty('closingSong', w.closingSong);
+                setIfEmpty('part1Title', w.part1Title);
+                if ((!md.ministryParts || md.ministryParts.length === 0) && w.ministryParts.length > 0) {
+                    md.ministryParts = w.ministryParts.map(p => ({ title: p.title, name: '', assistant: '', kind: p.kind, detail: p.detail || '' }));
+                } else if (md.ministryParts && md.ministryParts.length && w.ministryParts.length) {
+                    // v48: backfill EMPTY detail lang sa mga existing part (title-matched, else positional) — hindi ginagalaw ang pangalan/assignment
+                    const normT = t => String(t || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                    md.ministryParts.forEach((mp, i) => {
+                        if (!mp || (mp.detail !== undefined && mp.detail !== '')) return;
+                        const same = w.ministryParts.filter(wp => normT(wp.title) === normT(mp.title));
+                        const match = same[partOccurrence(md.ministryParts, i)] || w.ministryParts[i];
+                        if (match && match.detail) mp.detail = match.detail;
+                    });
+                }
+                w.pamumuhayTitles.forEach((t, i) => {
+                    const f = 'pamumuhayTitle' + i;
+                    if (t && (md[f] === undefined || md[f] === '' || md[f] === 'Pamumuhay')) md[f] = t;
+                });
+                // v51: itago ang context sa persistent lookup (lahat ng linggo sa EPUB), para lumabas kahit hindi i-re-import ulit
+                if (w.ministryParts && w.ministryParts.length) {
+                    wbDetails[w.thursday] = wbBucketFrom(w.ministryParts.concat(w.livingDetails || []));
+                }
+            });
+        }
+
+        // v61: mga linggong hindi pa na-i-import pero nasa naka-bundle na workbook (lib/wb-context.js) —
+        // pinupunan ang pamagat, awit, at mga bahagi para alam ng app kung ilan ang bahagi (hal. 2 sa Living as Christians).
+        // Linggong ito pataas lang, at kung wala pang laman ang linggo (hindi ginagalaw ang na-import o na-edit na).
+        function fillWeeksFromBuiltInWorkbook() {
+            if (typeof WB_WEEKS === 'undefined') return 0;
+            const fromThu = thursdayOfWeek(manilaTodayISO());
+            const list = [];
+            Object.keys(WB_WEEKS).sort().forEach(thu => {
+                if (thu < fromThu) return;
+                const md = meetingEditorData[getMeetingEditorKey(thu)];
+                if (md && (md.part1Title || (md.ministryParts || []).length)) return;
+                const W = WB_WEEKS[thu];
+                list.push({
+                    thursday: thu, bibleReading: W.b || '',
+                    openingSong: (W.s || [])[0] || '', middleSong: (W.s || [])[1] || '', closingSong: (W.s || [])[2] || '',
+                    part1Title: W.p1 || '',
+                    ministryParts: (W.m || []).map(([t, d]) => ({ title: t, name: '', assistant: '', kind: detectPartKind(t, d), detail: d || '' })),
+                    pamumuhayTitles: (W.l || []).map(x => x[0]),
+                    livingDetails: (W.l || []).map(([t, d]) => ({ title: 'living|' + t, detail: d || '' }))
+                });
+            });
+            if (!list.length) return 0;
+            mergeWorkbookWeeks(list);
+            applyChairmanTalkKinds();
+            saveMeetingEditorData();
+            saveWbDetails();
+            return list.length;
         }
 
         function applyWorkbookImport() {
@@ -2436,27 +2596,10 @@ function wbWeekToThursday(label, ctx) {
                 delete meetingEditorData[lk];
                 movedOff.push(w.legacyThursday);
             });
-            weeks.forEach(w => {
-                const key = getMeetingEditorKey(w.thursday);
-                if (!meetingEditorData[key]) meetingEditorData[key] = {};
-                const md = meetingEditorData[key];
-                const setIfEmpty = (field, val) => {
-                    if (val && (md[field] === undefined || md[field] === '' || md[field] === null)) md[field] = val;
-                };
-                setIfEmpty('bibleReading', w.bibleReading);
-                setIfEmpty('openingSong', w.openingSong);
-                setIfEmpty('middleSong', w.middleSong);
-                setIfEmpty('closingSong', w.closingSong);
-                setIfEmpty('part1Title', w.part1Title);
-                if ((!md.ministryParts || md.ministryParts.length === 0) && w.ministryParts.length > 0) {
-                    md.ministryParts = w.ministryParts.map(p => ({ title: p.title, name: '', assistant: '', kind: p.kind }));
-                }
-                w.pamumuhayTitles.forEach((t, i) => {
-                    const f = 'pamumuhayTitle' + i;
-                    if (t && (md[f] === undefined || md[f] === '' || md[f] === 'Pamumuhay')) md[f] = t;
-                });
-            });
+            mergeWorkbookWeeks(weeks);
+            applyChairmanTalkKinds();
             saveMeetingEditorData();
+            saveWbDetails();
             workbookPreview = null;
             closeWorkbookModal();
             if (currentView === 'pdfEditor') renderPdfEditor();
@@ -2485,9 +2628,10 @@ function wbWeekToThursday(label, ctx) {
             explainDemo: { label: 'Explaining Your Beliefs (Demonstration)', short: 'Explaining Beliefs (Demo)', brotherOnly: false, assistant: true, student: true },
             talk:        { label: 'Talk', short: 'Talk', brotherOnly: true, assistant: false, student: true },
             discussion:  { label: 'Discussion (Elder/MS — not a student part)', short: 'Discussion', brotherOnly: true, assistant: false, student: false },
+            chairman:    { label: "Chairman's talk (no student, no S-89)", short: "Chairman's talk", brotherOnly: true, assistant: false, student: false },
             unknown:     { label: '⚠ Unrecognized — choose the part type', short: '?', brotherOnly: false, assistant: true, student: true }
         };
-        const MINISTRY_KIND_OPTIONS = ['initial', 'returnVisit', 'study', 'explainDemo', 'explainTalk', 'talk', 'discussion', 'unknown'];
+        const MINISTRY_KIND_OPTIONS = ['initial', 'returnVisit', 'study', 'explainDemo', 'explainTalk', 'talk', 'discussion', 'chairman', 'unknown'];
         const PERSON_ATAS = ['Elder', 'MS', 'Publisher', 'UB-Publisher'];
         const HISTORY_WINDOW_WEEKS = 26; // ~6 buwan para sa "pag-uulit" na bilang
 
@@ -2521,9 +2665,14 @@ function wbWeekToThursday(label, ctx) {
         }
 
         // --- Uri ng bahagi mula sa pamagat (at sa unang salita ng paliwanag sa workbook) ---
+        // v57: "Pahayag ng chairman" — bahagi ng chairman kahit "Paggawa ng mga Alagad" ang pamagat (hal. Ene 25-31, Peb 22-28)
+        function isChairmanTalkText(detail) { return /^\s*(\(\s*\d+\s*min\.?\s*\)\s*)?pahayag ng chairman/i.test(detail || ''); }
+        // Mga bahaging elder/MS/chairman ang gumaganap — walang estudyante, walang S-89, walang context
+        function isLeaderKind(kind) { return kind === 'discussion' || kind === 'chairman'; }
         function detectPartKind(title, note) {
             const t = (title || '').toLowerCase();
             const n = (note || '').toLowerCase().replace(/^\s*\(\s*\d+\s*min\.?\s*\)\s*/, '').trim();
+            if (n.startsWith('pahayag ng chairman')) return 'chairman';
             if (/ano ang sasabihin mo/.test(t) || n.startsWith('pagtalakay')) return 'discussion';
             if (/pagpapasimula/.test(t)) return 'initial';
             if (/pakikipag-usap muli|pagdalaw-muli/.test(t)) return 'returnVisit';
@@ -2557,7 +2706,7 @@ function wbWeekToThursday(label, ctx) {
                 add(md.bibleReadingId || findPersonByName(md.bibleReadingName)?.id, date, 'bible', 'Estudyante');
                 (md.ministryParts || []).forEach(part => {
                     const kind = getPartKind(part);
-                    if (kind === 'discussion') return;
+                    if (isLeaderKind(kind)) return;
                     const sid = part.studentId || findPersonByName(part.name)?.id || '';
                     const aid = STUDENT_KINDS[kind]?.assistant ? (part.assistantId || findPersonByName(part.assistant)?.id || '') : '';
                     add(sid, date, kind, 'Estudyante', aid);
@@ -2619,6 +2768,29 @@ function wbWeekToThursday(label, ctx) {
             return true;
         }
 
+        // v41: fairness para sa student/partner — spacing ng papel, RP distribution, iba-ibang partner
+        const ROLE_GAP_WEEKS = 6;               // v58: student vs partner: iwasan kung < 6 linggo ang pagitan (bago O pagkatapos)
+        const ROLE_GAP_STEP = 45;               // bawat linggong mas malapit, dagdag na parusa
+        // v58: pinakamalapit na bahagi niya sa kabilang papel — bago o pagkatapos ng linggong ito
+        function nearestRoleGap(hist, pid, thursday, role) {
+            let best = null;
+            (hist[pid] || []).forEach(e => {
+                if (e.role !== role || e.date === thursday) return;
+                const w = weeksBetween(e.date, thursday);
+                if (!best || w < best.w) best = { w, e };
+            });
+            return best;
+        }
+        function roleGapNote(g, thursday, what) {
+            return `${what} ${g.w === 1 ? '1 wk' : g.w + ' wks'} ${g.e.date < thursday ? 'before' : 'after'} — spacing student vs partner`;
+        }
+        function brotherPairTarget() { const n = parseInt(meetingSettings.brotherPairs, 10); return isNaN(n) ? 2 : Math.max(0, n); }
+        function isPairKind(kind) { return !isLeaderKind(kind) && kind !== 'unknown' && !!STUDENT_KINDS[kind]?.assistant; }
+        const PARTNER_REPEAT_PENALTY = 110;     // bawat dating pagiging magkapartner
+        const PARTNER_REPEAT_RECENT_WEEKS = 8;  // "kamakailan" kung loob nito
+        const PARTNER_REPEAT_RECENT_BONUS = 60; // dagdag na parusa kung kamakailan lang sila nag-partner
+        const RP_PAIR_PENALTY = 130;            // RP + RP na partner
+
         // Ranked candidates para sa Estudyante
         // v13: (1) lahat ay dapat maging Estudyante — inuuna ang madalas na Assistant pero bihirang Estudyante;
         //      (2) iba-ibang uri ng bahagi — inuuna ang hindi pa nila nagagawa bilang Estudyante;
@@ -2633,6 +2805,17 @@ function wbWeekToThursday(label, ctx) {
                 const notes = [];
                 if (kind === 'discussion') {
                     score += s.lastAny ? Math.min(weeksBetween(s.lastAny.date, thursday), HISTORY_WINDOW_WEEKS) * 3 : 60;
+                } else if (kind === 'bible') {
+                    // v46: Bible reading — unahin ang mga Publisher/Brother (kasama ang reader sa CBS); MS sa huli ng bawat ikot.
+                    // Round-robin: mas kaunting dating Bible reading = mas una; sa loob ng parehong bilang, non-MS muna (step 200 > gap 100
+                    // kaya natatapos muna ang LAHAT ng non-MS sa isang ikot bago pumasok ang MS). Nananatili sa huli ang conflict/adjacency.
+                    const bibleCount = s.all.filter(e => e.date !== thursday && e.kind === 'bible' && e.role === 'Estudyante').length;
+                    const isMS = p.atas === 'MS';
+                    score += 1000 - bibleCount * 200 - (isMS ? 100 : 0);
+                    notes.push(isMS ? 'MS — after publishers/brothers' : 'publisher/brother — priority for Bible reading');
+                    if (bibleCount) notes.push(`read the Bible ${bibleCount}× already`);
+                    const ra = nearestRoleGap(hist, p.id, thursday, 'Assistant');
+                    if (ra && ra.w < ROLE_GAP_WEEKS) { score -= (ROLE_GAP_WEEKS - ra.w) * ROLE_GAP_STEP; notes.push(roleGapNote(ra, thursday, 'assistant')); }
                 } else {
                     const mine = s.all.filter(e => e.date !== thursday);
                     const asStu = mine.filter(e => e.role === 'Estudyante');
@@ -2646,6 +2829,9 @@ function wbWeekToThursday(label, ctx) {
                     const sameKind = asStu.filter(e => e.kind === kind).length;
                     if (sameKind) { score -= 35 * sameKind; notes.push(`did ${STUDENT_KINDS[kind]?.short || kind} ${sameKind}× already`); }
                     else if (asStu.length) { score += 25; notes.push('new part type for them'); }
+                    // v58: huwag masyadong malapit ang student part sa pagiging partner niya (bago o pagkatapos)
+                    const ra = nearestRoleGap(hist, p.id, thursday, 'Assistant');
+                    if (ra && ra.w < ROLE_GAP_WEEKS) { score -= (ROLE_GAP_WEEKS - ra.w) * ROLE_GAP_STEP; notes.push(roleGapNote(ra, thursday, 'assistant')); }
                 }
                 if (s.future.length) { score -= 40; notes.push(`already assigned on ${shortDate(s.future[s.future.length - 1].date)}`); }
                 const adj = adjacentPartNote(p, thursday, hist, ctx);
@@ -2674,9 +2860,16 @@ function wbWeekToThursday(label, ctx) {
                 score += s.lastAny ? Math.min(weeksBetween(s.lastAny.date, thursday), HISTORY_WINDOW_WEEKS) * 2 : 50;
                 const paired = (hist[p.id] || []).filter(e => e.partner === student.id && e.date !== thursday);
                 if (paired.length) {
-                    score -= 80 * paired.length;
+                    score -= PARTNER_REPEAT_PENALTY * paired.length;
+                    const lastPair = paired.map(e => e.date).sort().reverse()[0];
+                    if (weeksBetween(lastPair, thursday) < PARTNER_REPEAT_RECENT_WEEKS) score -= PARTNER_REPEAT_RECENT_BONUS;
                     notes.unshift(`⚠ partnered with ${student.first} before (${paired.map(e => shortDate(e.date)).join(', ')})`);
                 }
+                // v41: iwasang laging RP+RP — ipares ang RP sa hindi-RP para masanay sila
+                if (student.pioneer && p.pioneer) { score -= RP_PAIR_PENALTY; notes.unshift('⚠ both RP — pair an RP with a non-RP'); }
+                // v58: huwag masyadong malapit ang pagiging partner sa student part niya (bago o pagkatapos)
+                const rs = nearestRoleGap(hist, p.id, thursday, 'Estudyante');
+                if (rs && rs.w < ROLE_GAP_WEEKS) { score -= (ROLE_GAP_WEEKS - rs.w) * ROLE_GAP_STEP; notes.push(roleGapNote(rs, thursday, 'student part')); }
                 if (!(hist[p.id] || []).some(e => e.role === 'Estudyante' && e.date !== thursday)) { score -= 25; notes.push('not a student yet'); }
                 if (s.future.length) { score -= 40; notes.push(`already assigned on ${shortDate(s.future[s.future.length - 1].date)}`); }
                 const adj = adjacentPartNote(p, thursday, hist, ctx);
@@ -2741,13 +2934,14 @@ function wbWeekToThursday(label, ctx) {
             const part = (md.ministryParts || [])[index];
             if (!part || !STUDENT_KINDS[kind]) return;
             part.kind = kind;
+            part.kindManual = true; // v57: pinili mismo ng user — hindi na gagalawin ng auto-detection
             const k = STUDENT_KINDS[kind];
             const stu = getPerson(part.studentId) || findPersonByName(part.name);
             const cleared = [];
             const genderOk = !k.brotherOnly || (stu && stu.gender === 'Brother');
             const discOk = kind !== 'discussion' || (stu && (stu.atas === 'Elder' || stu.atas === 'MS'));
-            if (stu && !(genderOk && discOk)) {
-                part.studentId = ''; part.name = ''; cleared.push('student');
+            if ((stu && !(genderOk && discOk)) || (kind === 'chairman' && (part.studentId || (part.name || '').trim()))) {
+                part.studentId = ''; part.name = ''; cleared.push('student'); // v57: chairman ang gaganap sa "Chairman's talk"
             }
             if (!k.assistant && (part.assistant || part.assistantId)) { part.assistantId = ''; part.assistant = ''; cleared.push('assistant'); }
             saveMeetingEditorData();
@@ -2924,7 +3118,7 @@ function wbWeekToThursday(label, ctx) {
                 ${renderAutoRangeControls()}
                 <button onclick="startStudentAutoAssign()" class="btn-primary" title="Fill the empty student slots in the chosen months fairly">✨ Auto-Assign</button>
                 <button onclick="clearStudentPartsForMonth()" class="btn-secondary" title="Clear every student name for this month">🧹 Clear Month</button>
-                <button onclick="exportS89Slips()" class="btn-secondary" title="Make S-89 assignment slips (4 per page) for this month's students">🧾 S-89 Slips</button>
+                <button onclick="exportS89Slips()" class="btn-secondary" title="Make one S-89 JPEG slip per student for this month (saved to the S-89 Slips folder inside your schedule folder)">🧾 S-89 Slips</button>
                 ${studentUndo ? `<button onclick="undoStudentAutoAssign()" class="btn-secondary" title="Remove the names added by the last auto-assign">↩ Undo Auto-Assign</button>` : ''}
                 <label class="stu-check"><input type="checkbox" ${studentSettings.includeElders ? 'checked' : ''} onchange="toggleIncludeElders(this.checked)"> Include elders in student parts</label>
             </div>`;
@@ -2939,6 +3133,7 @@ function wbWeekToThursday(label, ctx) {
             }
             if (rosterOpen) html += renderRosterPanel();
             html += renderStudentIssuesBanner();
+            html += renderNoMeetingBanner();
 
             thursdays.forEach(thursday => { html += renderStudentWeek(thursday); });
             container.innerHTML = html;
@@ -2974,14 +3169,23 @@ function wbWeekToThursday(label, ctx) {
             const k = STUDENT_KINDS[kind] || STUDENT_KINDS.unknown;
             const slotArg = slot === 'bible' ? `'bible'` : slot;
             const clearBtn = (which, title) => `<button class="stu-x" title="${title}" onclick="clearStudentSlot('${thursday}', ${slotArg}, '${which}')">✕</button>`;
-            let h = `<div class="stu-slot ${kind === 'discussion' ? 'stu-slot-disc' : ''}">`;
+            let h = `<div class="stu-slot ${isLeaderKind(kind) ? 'stu-slot-disc' : ''}">`;
             h += `<div class="stu-slot-title">${escHtml(part.title || '(no title)')}</div>`;
+            // v54: discussion-type parts (hal. 'Ano ang Sasabihin Mo?') ay elder/MS ang gumaganap — walang context
+            const _wkParts = (meetingEditorData[getMeetingEditorKey(thursday)] || {}).ministryParts || [];
+            const _dtl = (isLeaderKind(kind) || slot === 'bible') ? '' : partContext(thursday, _wkParts, slot);
+            if (_dtl) h += `<div class="stu-detail" title="From the workbook — the context of this part">↳ ${escHtml(_dtl)}</div>`;
             if (slot === 'bible') {
                 h += `<div class="stu-kind"><span class="stu-badge">Brothers only</span></div>`;
             } else {
                 h += `<div class="stu-kind"><select onchange="setPartKind('${thursday}', ${slot}, this.value)">` +
                     MINISTRY_KIND_OPTIONS.map(o => `<option value="${o}" ${o === kind ? 'selected' : ''}>${escHtml(STUDENT_KINDS[o].label)}</option>`).join('') +
-                    `</select>${k.brotherOnly && kind !== 'discussion' ? '<span class="stu-badge">Brothers only</span>' : ''}</div>`;
+                    `</select>${k.brotherOnly && !isLeaderKind(kind) ? '<span class="stu-badge">Brothers only</span>' : ''}</div>`;
+            }
+            if (kind === 'chairman') {
+                // v57: walang estudyante — ang chairman ang gaganap; walang S-89 slip
+                const ch = getAssignedBrother(thursday, 'OCLM Chairman');
+                return h + `<div class="stu-hint">🎤 Chairman's talk — the chairman gives this part${ch ? ` (<b>${escHtml(ch)}</b>)` : ''}. No student, no assistant, no S-89 slip.</div></div>`;
             }
             const ranked = rankStudentCandidates(thursday, kind, studentId);
             const who = kind === 'discussion' ? '— Elder/MS —' : '— Student —';
@@ -3063,15 +3267,23 @@ function wbWeekToThursday(label, ctx) {
         const TG_MONTHS = ['', 'ENERO', 'PEBRERO', 'MARSO', 'ABRIL', 'MAYO', 'HUNYO', 'HULYO', 'AGOSTO', 'SETYEMBRE', 'OKTUBRE', 'NOBYEMBRE', 'DISYEMBRE'];
         const MEETING_MAX_MIN = 105; // 1 oras at 45 minuto, kasama ang mga awit at panalangin
         const S140_GRID = [648, 5068, 1800, 3500]; // v26: mas malapad ang pamagat para hindi na tumiklop ang "Pag-aaral ng Kongregasyon sa Bibliya" // oras | bahagi | label | pangalan (kabuuang 11016)
-        let meetingSettings = { congName: '', startTime: '18:45', openingMin: 5, middleMin: 4, closingMin: 5, counselMin: 1, msMayChair: false, anchorClosing: true, msTalkMax: 2 };
+        let meetingSettings = { congName: 'Pansol Congregation', startTime: '18:45', openingMin: 5, middleMin: 4, closingMin: 5, counselMin: 1, msMayChair: false, anchorClosing: true, msTalkMax: 2, msLivingMin: 1, brotherPairs: 2 };
         let msPanelOpen = false;
 
         function saveMeetingSettings() { localStorage.setItem('nc_meetingSettings', JSON.stringify(meetingSettings)); }
         function loadMeetingSettings() {
             try { const s = JSON.parse(localStorage.getItem('nc_meetingSettings') || '{}'); meetingSettings = { ...meetingSettings, ...s }; } catch (e) {}
+            // Pangalan ng kongregasyon: kung wala pa, o kung luma pang placeholder ("New Congregation", atbp.),
+            // palitan ng Pansol Congregation at i-save. Hinahawakan din nito ang dating naka-save sa localStorage.
+            const cn = (meetingSettings.congName || '').trim();
+            const placeholders = ['', 'new congregation', 'bagong kongregasyon', 'nc', '[pangalan ng kongregasyon]'];
+            if (placeholders.includes(cn.toLowerCase())) {
+                meetingSettings.congName = 'Pansol Congregation';
+                saveMeetingSettings();
+            }
         }
         function updateMeetingSetting(field, value) {
-            if (['openingMin', 'middleMin', 'closingMin', 'counselMin', 'msTalkMax'].includes(field)) {
+            if (['openingMin', 'middleMin', 'closingMin', 'counselMin', 'msTalkMax', 'msLivingMin', 'brotherPairs'].includes(field)) {
                 const n = parseInt(value, 10);
                 meetingSettings[field] = isNaN(n) || n < 0 ? 0 : Math.min(n, 30);
             } else if (field === 'msMayChair' || field === 'anchorClosing') {
@@ -3092,22 +3304,98 @@ function wbWeekToThursday(label, ctx) {
         // Lokal na Pangangailangan: ang Pamumuhay part ay itinatala ayon sa pagkakasunod (slot 0, 1, …),
         // kaya ang susunod na idaragdag ay pupunta sa slot = bilang ng naka-assign na.
         function isLocalNeedsTitle(title) { return /lokal na pangangailangan/i.test(title || ''); }
-        function nextPamumuhaySlot(date) { return assignments.filter(a => a.date === date && a.type === 'Pamumuhay').length; }
+        // v62: bawat atas sa Living as Christians ay may sariling "slot" (0 = unang bahagi, 1 = ikalawa…), para
+        //      maiwang TBA ang Lokal na Pangangailangan habang napupunan ang kabilang bahagi, at hindi umuusog ang
+        //      mga pangalan kapag may inalis. Ang lumang atas na walang slot ay binibigyan ng pinakamababang bakante.
+        function pamSlotMap(date) {
+            const list = assignments.filter(a => a.date === date && a.type === 'Pamumuhay');
+            const used = new Set(list.filter(a => Number.isInteger(a.slot)).map(a => a.slot));
+            const map = new Map();
+            list.forEach(a => {
+                if (Number.isInteger(a.slot)) { map.set(a, a.slot); return; }
+                let k = 0; while (used.has(k)) k++;
+                used.add(k); map.set(a, k);
+            });
+            return map;
+        }
+        // pang-ilang Living-as-Christians na bahagi ang atas na ito sa linggo (0 = una)
+        function pamIndexOf(a) { const s = pamSlotMap(a.date).get(a); return s === undefined ? -1 : s; }
+        // atas sa isang slot (o null)
+        function pamAssignmentAt(date, slot) {
+            for (const [a, k] of pamSlotMap(date)) if (k === slot) return a;
+            return null;
+        }
+        // susunod na slot na pupunan: ang pinapalitan (habang pumipili), o ang pinakamababang bakante na HINDI
+        // Lokal na Pangangailangan; kung iyon na lang ang bakante, iyon (para sa manu-manong pagpili ng elder)
+        function nextPamumuhaySlot(date) {
+            const map = pamSlotMap(date);
+            for (const [a, k] of map) if (a.brotherId === '__vacant__') return k;
+            const taken = new Set(map.values());
+            const count = livingSlotCount(date);
+            let firstFree = -1;
+            for (let k = 0; k < count; k++) {
+                if (taken.has(k)) continue;
+                if (!isLocalNeedsSlot(date, k)) return k;
+                if (firstFree < 0) firstFree = k;
+            }
+            if (firstFree >= 0) return firstFree; // Lokal na Pangangailangan na lang ang bakante
+            let k = count; while (taken.has(k)) k++;
+            return k; // dagdag na bahagi
+        }
+        // bakanteng slot na puwedeng i-auto-assign (hindi Lokal na Pangangailangan), o -1
+        function nextAutoLivingSlot(date) {
+            const taken = new Set(pamSlotMap(date).values());
+            for (let k = 0; k < livingSlotCount(date); k++) if (!taken.has(k) && !isLocalNeedsSlot(date, k)) return k;
+            return -1;
+        }
+        // lagyan ng slot ang lahat ng lumang atas sa Living as Christians (para hindi umusog kapag may inalis)
+        function ensurePamSlots() {
+            let n = 0;
+            const dates = [...new Set(assignments.filter(a => a.type === 'Pamumuhay' && !Number.isInteger(a.slot)).map(a => a.date))];
+            dates.forEach(d => { for (const [a, k] of pamSlotMap(d)) if (!Number.isInteger(a.slot)) { a.slot = k; n++; } });
+            return n;
+        }
+        // v59: bahaging wala pang 15 minuto (hal. 5, 7, 10 min) — bukas sa MS at hindi binibilang sa "isang beses bawat buwan"
+        function isShortLivingSlot(date, idx) {
+            const md = meetingEditorData[getMeetingEditorKey(date)] || {};
+            const m = titleMinutes(md['pamumuhayTitle' + idx]);
+            return m !== null && m < 15;
+        }
+        // v58: ilang Living-as-Christians na bahagi ang nasa workbook ng linggong ito (kahit 1)
+        function livingSlotCount(date) {
+            const md = meetingEditorData[getMeetingEditorKey(date)] || {};
+            let n = 0;
+            for (let i = 0; i < 6; i++) if (md['pamumuhayTitle' + i]) n = i + 1;
+            const wb = (typeof WB_WEEKS !== 'undefined' && WB_WEEKS[date]) ? (WB_WEEKS[date].l || []).length : 0; // v61
+            return Math.max(1, n, wb);
+        }
         function isLocalNeedsSlot(date, slotIdx) {
             const md = meetingEditorData[getMeetingEditorKey(date)] || {};
             return isLocalNeedsTitle(md['pamumuhayTitle' + slotIdx]);
         }
+        // v58: Living-as-Christians na bahagi na sinasabi ng workbook na elder ang gaganap
+        // (hal. "Pagtalakay ng isang elder", "Pahayag ng tagapangasiwa sa paglilingkod")
+        function livingDetailFor(date, idx) {
+            const md = meetingEditorData[getMeetingEditorKey(date)] || {};
+            const t = md['pamumuhayTitle' + idx];
+            return t ? wbDetailFor(date, 'living|' + t) : '';
+        }
+        function isLivingElderOnlySlot(date, idx) { return /\belder\b|tagapangasiwa/i.test(livingDetailFor(date, idx)); }
+        function isElderLivingSlot(date, idx) { return isLocalNeedsSlot(date, idx) || isLivingElderOnlySlot(date, idx); }
         function requiresElder(date, type) {
             if (ELDER_ONLY_TYPES.includes(type)) return !meetingSettings.msMayChair;
             // S-38 ¶16: ang lokal na pangangailangan ay dapat gampanan ng elder (walang eksepsiyon para sa MS)
-            if (type === 'Pamumuhay' && date) return isLocalNeedsSlot(date, nextPamumuhaySlot(date));
+            if (type === 'Pamumuhay' && date) return isElderLivingSlot(date, nextPamumuhaySlot(date));
             return false;
         }
         function confirmElderOnly(brotherId, type, date) {
             const b = brothers.find(x => x.id === brotherId);
             if (!b || getBrotherCategory(b) === 'Elder' || !requiresElder(date, type)) return true;
             if (type === 'Pamumuhay') {
-                return confirm(`According to the S-38, Local Needs (Lokal na Pangangailangan) must be handled by an elder.\n\n${b.name} is ${getBrotherCategory(b)}. Assign anyway?`);
+                const why = isLocalNeedsSlot(date, nextPamumuhaySlot(date))
+                    ? 'According to the S-38, Local Needs (Lokal na Pangangailangan) must be handled by an elder.'
+                    : 'The workbook says this Living as Christians part is given by an elder.';
+                return confirm(`${why}\n\n${b.name} is ${getBrotherCategory(b)}. Assign anyway?`);
             }
             const role = type === 'CBS' ? 'conductor of the Congregation Bible Study' : 'chairman of the meeting';
             return confirm(`According to the S-38, the ${role} should be an elder. A ministerial servant may be used only when the number of elders is limited.\n\n${b.name} is ${getBrotherCategory(b)}. Assign anyway?`);
@@ -3166,40 +3454,43 @@ function wbWeekToThursday(label, ctx) {
             const song = n => `Awit ${n || ''}`.trim();
 
             // Pambungad
-            push('open', { text: song(md.openingSong), label: 'Panalangin:', names: getAssignedBrother(thursday, 'Opening Prayer') }, s.openingMin);
+            push('open', { text: song(md.openingSong), label: 'Panalangin:', names: getAssignedBrother(thursday, 'Opening Prayer'), ed: { t: 'song', f: 'openingSong' } }, s.openingMin);
             push('open', { text: 'Pambungad na Komento', dispMin: 1 }, 1);
 
             // Kayamanan
             const p1m = titleMinutes(md.part1Title) ?? 10;
-            push('kayaman', { num: 1, text: titleText(md.part1Title) || '[Pamagat]', dispMin: p1m, names: getAssignedBrother(thursday, '10 mins talk') }, p1m);
+            push('kayaman', { num: 1, text: titleText(md.part1Title) || '[Pamagat]', dispMin: p1m, names: getAssignedBrother(thursday, '10 mins talk'), ed: { t: 'part1' } }, p1m);
             push('kayaman', { num: 2, text: 'Espirituwal na Hiyas', dispMin: 10, names: getAssignedBrother(thursday, 'Espiritual na Hiyas') }, 10);
-            push('kayaman', { num: 3, text: 'Pagbabasa ng Bibliya', dispMin: 4, label: 'Estudyante:', names: md.bibleReadingName || '' }, 4 + s.counselMin);
+            push('kayaman', { num: 3, text: 'Pagbabasa ng Bibliya', dispMin: 4, label: 'Estudyante:', names: md.bibleReadingName || '', ed: { t: 'bible' } }, 4 + s.counselMin);
 
             // Maging Mahusay sa Ministeryo
             let num = 4;
             const mStart = t;
-            (md.ministryParts || []).forEach(part => {
+            (md.ministryParts || []).forEach((part, mi) => {
                 const kind = getPartKind(part);
                 const k = STUDENT_KINDS[kind] || STUDENT_KINDS.unknown;
                 let m = titleMinutes(part.title);
                 if (m === null) { model.warnings.push(`#${num}: no minutes in the title`); m = 0; }
-                const label = kind === 'discussion' ? '' : (k.assistant ? 'Estudyante/Assistant:' : 'Estudyante:');
-                const names = k.assistant ? pairNames(part.name, part.assistant) : (part.name || '');
-                push('ministry', { num, text: titleText(part.title) || '[Pamagat]', dispMin: m || null, label, names, pair: k.assistant }, m + (k.student ? s.counselMin : 0));
+                const label = isLeaderKind(kind) ? '' : (k.assistant ? 'Estudyante/Assistant:' : 'Estudyante:');
+                const isChair = kind === 'chairman';
+                const names = isChair ? (model.chairman || '') : (k.assistant ? pairNames(part.name, part.assistant) : (part.name || ''));
+                push('ministry', { num, text: titleText(part.title) || '[Pamagat]', dispMin: m || null, label, names, pair: k.assistant, chairPart: isChair, ed: { t: 'ministry', i: mi } }, m + (k.student ? s.counselMin : 0));
                 num++;
             });
             model.ministryMin = t - mStart;
 
             // Pamumuhay Bilang Kristiyano
-            push('living', { text: song(md.middleSong) }, s.middleMin);
-            const livBros = getAssignedBrotherObjs(thursday, 'Pamumuhay');
+            push('living', { text: song(md.middleSong), ed: { t: 'song', f: 'middleSong' } }, s.middleMin);
+            // v62: ayon sa slot ng atas (hindi sa pagkakasunod ng pagkakalagay)
+            const livBros = [];
+            for (const [a, k] of pamSlotMap(thursday)) livBros[k] = brothers.find(b => b.id === a.brotherId) || null;
             let titleCount = 0;
             for (let i = 0; i < 6; i++) if (md['pamumuhayTitle' + i]) titleCount = i + 1;
             const living = [];
             for (let i = 0; i < Math.max(titleCount, livBros.length, 1); i++) {
-                living.push({ title: md['pamumuhayTitle' + i] || '', name: livBros[i]?.name || '', bro: livBros[i] || null });
+                living.push({ title: md['pamumuhayTitle' + i] || '', name: livBros[i]?.name || '', bro: livBros[i] || null, ed: { t: 'living', i } });
             }
-            (md.livingParts || []).forEach(p => living.push({ title: p.title || '', name: p.name || '', bro: null }));
+            (md.livingParts || []).forEach((p, i) => living.push({ title: p.title || '', name: p.name || '', bro: null, ed: { t: 'livingExtra', i } }));
             const known = living.reduce((acc, p) => acc + (titleMinutes(p.title) || 0), 0);
             const unknown = living.filter(p => titleMinutes(p.title) === null).length;
             const lStart = t;
@@ -3216,7 +3507,7 @@ function wbWeekToThursday(label, ctx) {
                 // v25: Lokal na Pangangailangan na wala pang gaganap → "TBA" (pinag-uusapan pa ng mga elder)
                 const tba = isLocalNeedsTitle(p.title) && !String(p.name || '').trim();
                 if (tba) model.tbaLocalNeeds++;
-                push('living', { num, text: txt && txt !== 'Pamumuhay' ? txt : '[Pamagat]', dispMin: m, names: tba ? 'TBA' : p.name }, m);
+                push('living', { num, text: txt && txt !== 'Pamumuhay' ? txt : '[Pamagat]', dispMin: m, names: tba ? 'TBA' : p.name, ed: p.ed }, m);
                 num++;
             });
             model.livingMin = t - lStart;
@@ -3235,7 +3526,7 @@ function wbWeekToThursday(label, ctx) {
                 push('living', { num, text: 'Pag-aaral ng Kongregasyon sa Bibliya', dispMin: 30, label: 'Konduktor/Tagabasa:',
                     names: pairNames(getAssignedBrother(thursday, 'CBS'), getAssignedBrother(thursday, 'CBS Reader')), pair: true }, 30);
                 push('living', { text: 'Pangwakas na Komento', dispMin: 3 }, 3 + model.buffer);
-                push('living', { text: song(md.closingSong), label: 'Panalangin:', names: closingPrayer }, s.closingMin);
+                push('living', { text: song(md.closingSong), label: 'Panalangin:', names: closingPrayer, ed: { t: 'song', f: 'closingSong' } }, s.closingMin);
             }
             model.end = t;
 
@@ -3249,7 +3540,7 @@ function wbWeekToThursday(label, ctx) {
             const cb = getAssignedBrotherObjs(thursday, 'CBS')[0];
             if (model.type !== 'co' && cb && elderOnlyViolation(cb, 'CBS')) model.warnings.push(`CBS conductor: ${cb.name} is ${getBrotherCategory(cb)} (S-38: elder)`);
             model.missingNames = (model.chairman ? 0 : 1) +
-                model.rows.filter(r => 'names' in r && (!String(r.names || '').trim() || String(r.names).includes('—'))).length;
+                model.rows.filter(r => 'names' in r && !r.chairPart && (!String(r.names || '').trim() || String(r.names).includes('—'))).length;
             return model;
         }
 
@@ -3270,9 +3561,15 @@ function wbWeekToThursday(label, ctx) {
                     ${num('counselMin', 'Counsel after each student part (min)')}
                     <label class="ms-check ms-wide"><input type="checkbox" ${s.anchorClosing ? 'checked' : ''} onchange="updateMeetingSetting('anchorClosing', this.checked)">
                         Keep the closing song + prayer for the last ${s.closingMin} minutes of the 1:45 — any spare minutes go to the closing comments (announcements, letters)</label>
-                    ${num('msTalkMax', 'MS: max 10-min talks per month (whole congregation)')}
+                    ${num('msTalkMax', 'MS: 10-min talks per month (auto-assign aims for this; never back-to-back)')}
+                    ${num('msLivingMin', 'MS: 15-min Living as Christians parts per month (shorter parts are open to MS)')}
+                    ${num('brotherPairs', 'Brother pairs in Apply Yourself per month (Students auto-assign)')}
                     <label class="ms-check ms-wide"><input type="checkbox" ${s.msMayChair ? 'checked' : ''} onchange="updateMeetingSetting('msMayChair', this.checked)">
                         Limited number of elders: allow ministerial servants as Chairman and CBS conductor (S-38 ¶17, ¶25)</label>
+                    <div class="ms-wide" style="margin-top:4px;border-top:1px solid #e5e7eb;padding-top:8px;">
+                        <button class="btn-secondary text-sm" onclick="resetAcceptedWarnings()">↩ Reset accepted warnings (${acceptedWarningCount()})</button>
+                        <span style="color:#6b7280;font-size:12px;margin-left:6px;">Brings back every consecutive / repeat-part / MS-training warning you closed, so you can review them again.</span>
+                    </div>
                 </div>
             </details>`;
         }
@@ -3368,7 +3665,11 @@ function wbWeekToThursday(label, ctx) {
                 return wRow(time + wCell(g1, wPara(titleRuns)) +
                     wCell(g2, wPara(wRun(r.label, { b: 1, color: '575A5D', sz: 16 }), { jc: 'right' })) + nameCell);
             }
-            if (hasNames) return wRow(time + wCell(g1 + g2, wPara(titleRuns), { span: 2 }) + nameCell);
+            // v35: para pare-pareho ang hati ng mahahabang title sa lahat ng bahagi,
+            // ang title ay nasa g1 lang (gaya ng mga may label), at ang pangalan ay sa g2+g3.
+            // Kaya ang mahabang Pamumuhay/10-min/Gems title ay nag-2 lines din, hindi umaabot pakanan nang mag-isa.
+            // v36: title sa g1 (kaya nag-2 lines sa loob ng box), g2 blangko, pangalan nasa g3 — pantay sa lahat ng pangalan (gaya ng mga may label)
+            if (hasNames) return wRow(time + wCell(g1, wPara(titleRuns)) + wCell(g2, wPara('')) + nameCell);
             return wRow(time + wCell(g1 + g2 + g3, wPara(titleRuns), { span: 3 }));
         }
         function s140SectionTable(title, fill, rows) {
@@ -3402,6 +3703,33 @@ function wbWeekToThursday(label, ctx) {
                 s140SectionTable('MAGING MAHUSAY SA MINISTERYO', 'BE8900', sec('ministry')) + wSpacer(g) +
                 s140SectionTable('PAMUMUHAY BILANG KRISTIYANO', '7E0024', sec('living'));
         }
+        // v34: opsyonal na linya sa pagitan ng mga linggo sa S-140 PDF (mas madaling makita kung saan nagsisimula ang susunod)
+        let S140_WEEK_SEP = 'dashed'; // 'none' | 'hair' | 'rule' | 'thinthick' | 'accent' | 'dashed' | 'dashaccent'
+        const S140_SEP_STYLES = {
+            none:      null,
+            hair:      { val: 'single', sz: 6,  color: 'D1D5DB' },
+            rule:      { val: 'single', sz: 10, color: '9CA3AF' },
+            thinthick: { val: 'thinThickSmallGap', sz: 18, color: 'A6A6A6' },
+            accent:    { val: 'single', sz: 10, color: '7E0024' },
+            dashed:    { val: 'dashed', sz: 10, color: '9CA3AF' },
+            dashaccent:{ val: 'dashed', sz: 10, color: '7E0024' }
+        };
+        function s140SeparatorXml() {
+            const st = S140_SEP_STYLES[S140_WEEK_SEP];
+            if (!st) return wSpacer(S140_SP.week);
+            const half = Math.max(8, Math.round(S140_SP.week * 0.46));
+            const grid = S140_GRID.reduce((a, b) => a + b, 0);
+            const sep = `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/>` +
+                `<w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders>` +
+                `<w:tblLook w:val="04A0"/></w:tblPr><w:tblGrid><w:gridCol w:w="${grid}"/></w:tblGrid>` +
+                `<w:tr><w:trPr><w:trHeight w:val="20"/></w:trPr>` +
+                `<w:tc><w:tcPr><w:tcW w:w="${grid}" w:type="dxa"/>` +
+                `<w:tcBorders><w:bottom w:val="${st.val}" w:sz="${st.sz}" w:space="0" w:color="${st.color}"/></w:tcBorders>` +
+                `<w:vAlign w:val="center"/></w:tcPr>` +
+                `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/>${S140_LANG}</w:rPr></w:pPr></w:p>` +
+                `</w:tc></w:tr></w:tbl>`;
+            return wSpacer(half) + sep + wSpacer(half);
+        }
         function buildS140BodyXml(thursdays, spForce) {
             let xml = '';
             const models = thursdays.map(buildWeekModel);
@@ -3416,7 +3744,7 @@ function wbWeekToThursday(label, ctx) {
                 if (i > 0) xml += wPageBreak();
                 xml += s140PageHeader() + wSpacer(S140_SP.sec);
                 pageModels.forEach((m, k) => {
-                    if (k > 0) xml += wSpacer(S140_SP.week);
+                    if (k > 0) xml += s140SeparatorXml();
                     xml += s140WeekXml(m);
                 });
             }
@@ -3457,7 +3785,8 @@ function wbWeekToThursday(label, ctx) {
         function s140RowH(r, sp) {
             const [g0, g1, g2, g3] = S140_GRID;
             const title = `${r.num ? r.num + '. ' : ''}${r.text || ''}${r.dispMin ? ` (${r.dispMin} min.)` : ''}`;
-            const tW = r.label ? g1 : ('names' in r ? g1 + g2 : g1 + g2 + g3);
+            // v35: tumugma sa aktuwal na layout — title=g1 kapag may pangalan O may label; buong lapad lang kapag wala
+            const tW = ('names' in r || r.label) ? g1 : g1 + g2 + g3;
             let lines = s140TextLines(title, 22, false, tW);
             if ('names' in r) lines = Math.max(lines, s140TextLines(r.names, r.pair ? 20 : 22, false, g3));
             return Math.max(sp.row, lines * s140LineH(22));
@@ -3500,9 +3829,11 @@ function wbWeekToThursday(label, ctx) {
                 const blob = new Blob([bytes], { type: 'application/pdf' });
                 const monthName = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][month];
                 const name = `S-140 ${monthName} ${year}.pdf`;
-                const where = await saveToSchedule(name, blob);
+                // v56: folder ng TAON lang, hal. schedule\2026\S-140 November 2026.pdf (kita na ang buwan sa pangalan)
+                const res = await saveManyToSchedulePath([String(year)], [{ name, blob }]);
+                const where = res.where;
                 const tbaWeeks = thursdays.map(buildWeekModel).filter(m => !m.noMeeting && m.tbaLocalNeeds).map(m => shortDate(m.thursday));
-                alert((where === 'folder' ? `Saved ${name} to the "${lastSaveFolderName || 'schedule'}" folder!` : `Downloaded ${name} (it went to your Downloads folder).`) +
+                alert((where === 'folder' ? `Saved ${name} to the "${res.folder}" folder!` : `Downloaded ${name} (it went to your Downloads folder).`) +
                     (tbaWeeks.length ? `\n\nLocal Needs shown as "TBA" (no one assigned yet): ${tbaWeeks.join(', ')}.\nExport again once the elders decide.` : ''));
             } catch (e) {
                 alert('Error exporting the S-140: ' + e.message);
@@ -3777,10 +4108,41 @@ function wbWeekToThursday(label, ctx) {
                 if (!(getWeekData(thu).ministryParts || []).length) noParts++;
                 weeks.push(thu);
             });
-            const push = (thu, slot, role, pick, title) => {
+            const push = (thu, slot, role, pick, title, tag) => {
                 const k = `${thu}|${slot}|${role}`;
-                proposals.push({ thu, slot, role, personId: pick.p.id, title, info: pick.info, replaced: replaced[k] || '' });
+                proposals.push({ thu, slot, role, personId: pick.p.id, title, info: pick.info + (tag ? ' · ' + tag : ''), replaced: replaced[k] || '' });
             };
+            // v58: kahit N pares ng brother bawat buwan sa Maging Mahusay sa Ministeryo (demonstrasyong may assistant),
+            //      ikinakalat sa iba't ibang linggo. Ang assistant ay brother din (parehong kasarian); RP + RP ay iniiwasan pa rin.
+            const brotherSlots = new Set();
+            const brotherSid = p => { const id = p.studentId || findPersonByName(p.name)?.id; return !!id && getPerson(id)?.gender === 'Brother'; };
+            if (fixMode) {
+                Object.entries(replaced).forEach(([k, name]) => {
+                    const [thu, slot, role] = k.split('|');
+                    if (role !== 'student' || slot === 'bible') return;
+                    const part = ((meetingEditorData[getMeetingEditorKey(thu)] || {}).ministryParts || [])[+slot];
+                    if (part && isPairKind(getPartKind(part)) && findPersonByName(name)?.gender === 'Brother') brotherSlots.add(`${thu}|${slot}`);
+                });
+            } else if (brotherPairTarget() > 0) {
+                range.months.forEach(([y, m]) => {
+                    const monthThus = getThursdaysForMonthByWeekStart(y, m).filter(t => !isNoMeetingWeek(t));
+                    const hasBro = new Set();
+                    let have = 0;
+                    monthThus.forEach(t => ((meetingEditorData[getMeetingEditorKey(t)] || {}).ministryParts || []).forEach(p => {
+                        if (isPairKind(getPartKind(p)) && brotherSid(p)) { have++; hasBro.add(t); }
+                    }));
+                    const open = monthThus.filter(t => weeks.includes(t) && !hasBro.has(t)).map(t => ({
+                        t, slots: ((meetingEditorData[getMeetingEditorKey(t)] || {}).ministryParts || []).map((p, i) => ({ p, i }))
+                            .filter(x => isPairKind(getPartKind(x.p)) && !x.p.studentId && !(x.p.name || '').trim())
+                    })).filter(w => w.slots.length);
+                    const n = Math.min(brotherPairTarget() - have, open.length);
+                    for (let k = 0; k < n; k++) {
+                        const w = open[Math.floor((k + 0.5) * open.length / n)];
+                        const x = w.slots[Math.floor(Math.random() * w.slots.length)];
+                        brotherSlots.add(`${w.t}|${x.i}`);
+                    }
+                });
+            }
             // Yugto 1: Estudyante (Bible reading + student parts)
             weeks.forEach(thu => {
                 const md = getWeekData(thu);
@@ -3791,13 +4153,16 @@ function wbWeekToThursday(label, ctx) {
                 }
                 (md.ministryParts || []).forEach((part, i) => {
                     const kind = getPartKind(part);
-                    if (kind === 'discussion') return;
+                    if (isLeaderKind(kind)) return;
                     if (kind === 'unknown') { if (!(part.name || '').trim()) skippedUnknown++; return; }
                     if (!allowed(`${thu}|${i}|student`) || part.studentId || (part.name || '').trim()) return;
-                    const pick = rankStudentCandidates(thu, kind, '').find(c => !c.conflict);
+                    const ranked = rankStudentCandidates(thu, kind, '');
+                    const broSlot = brotherSlots.has(`${thu}|${i}`);
+                    let pick = broSlot ? ranked.find(c => !c.conflict && c.p.gender === 'Brother') : null;
+                    if (!pick) pick = ranked.find(c => !c.conflict);
                     if (!pick) { unfilled++; return; }
                     part.studentId = pick.p.id; part.name = personName(pick.p);
-                    push(thu, i, 'student', pick, part.title);
+                    push(thu, i, 'student', pick, part.title, broSlot && pick.p.gender === 'Brother' ? '👥 brother pair' : '');
                 });
             });
             // Yugto 2: Assistant
@@ -3805,21 +4170,22 @@ function wbWeekToThursday(label, ctx) {
                 const md = getWeekData(thu);
                 (md.ministryParts || []).forEach((part, i) => {
                     const kind = getPartKind(part);
-                    if (kind === 'discussion' || kind === 'unknown' || !STUDENT_KINDS[kind]?.assistant) return;
+                    if (isLeaderKind(kind) || kind === 'unknown' || !STUDENT_KINDS[kind]?.assistant) return;
                     if (!allowed(`${thu}|${i}|assistant`) || part.assistantId || (part.assistant || '').trim()) return;
                     const student = getPerson(part.studentId) || findPersonByName(part.name);
                     if (!student) return;
                     const pickA = rankAssistantCandidates(thu, student, '').find(c => !c.conflict);
                     if (!pickA) { unfilled++; return; }
                     part.assistantId = pickA.p.id; part.assistant = personName(pickA.p);
-                    push(thu, i, 'assistant', pickA, part.title);
+                    push(thu, i, 'assistant', pickA, part.title, brotherSlots.has(`${thu}|${i}`) && student.gender === 'Brother' ? '👥 brother pair' : '');
                 });
             });
             studentShuffleKey = null;
             meetingEditorData = JSON.parse(original); // walang na-save; preview lang
             const ord = s => s === 'bible' ? -1 : s;
             proposals.sort((a, b) => a.thu.localeCompare(b.thu) || ord(a.slot) - ord(b.slot) || (a.role === 'student' ? 0 : 1) - (b.role === 'student' ? 0 : 1));
-            studentAutoPreview = { proposals, unfilled, skippedUnknown, skippedWeeks, noParts, skippedPast,
+            const brotherPairsPlanned = proposals.filter(p => p.role === 'student' && /brother pair/.test(p.info)).length;
+            studentAutoPreview = { proposals, unfilled, skippedUnknown, skippedWeeks, noParts, skippedPast, brotherPairsPlanned,
                 rangeLabel: fixMode ? '' : range.label, clears: fixMode ? opts.clears.slice() : null, fixInfo: opts.fixInfo || '' };
             renderStudentAutoPreview();
             document.getElementById('studentAutoModal').classList.remove('hidden');
@@ -3836,6 +4202,7 @@ function wbWeekToThursday(label, ctx) {
             if (pv.skippedWeeks) extras.push(`${pv.skippedWeeks} no-meeting week(s) skipped`);
             if (pv.noParts) extras.push(`${pv.noParts} week(s) without workbook parts`);
             if (pv.skippedPast) extras.push(`${pv.skippedPast} past week(s) skipped`);
+            if (pv.brotherPairsPlanned) extras.push(`${pv.brotherPairsPlanned} brother pair(s) in Apply Yourself`);
             const head = pv.clears ? `🔁 Fix: ${pv.fixInfo || 'repeated partners and back-to-back parts'} — ` : (pv.rangeLabel ? `${pv.rangeLabel}: ` : '');
             if (s) s.textContent = `${head}${pv.proposals.length} proposed name(s)` + (extras.length ? ' • ' + extras.join(' • ') : '') +
                 (pv.clears ? '. Only the listed parts change.' : '. Discussion parts are left for you. Among people with equal priority the order is random — press 🔀 Shuffle Again for a different draw.');
@@ -4018,10 +4385,11 @@ function wbWeekToThursday(label, ctx) {
                         if (b && getBrotherCategory(b) !== 'Elder') out.push({ id: a.id, date, type, label: typeLabel(type), brother: b });
                     });
                 });
-                assignments.filter(a => a.date === date && a.type === 'Pamumuhay').forEach((a, i) => {
-                    if (!isLocalNeedsSlot(date, i)) return;
+                assignments.filter(a => a.date === date && a.type === 'Pamumuhay').forEach(a => {
+                    const i = pamIndexOf(a); // v62
+                    if (!isElderLivingSlot(date, i)) return;
                     const b = brothers.find(x => x.id === a.brotherId);
-                    if (b && getBrotherCategory(b) !== 'Elder') out.push({ id: a.id, date, type: 'Pamumuhay', label: 'Local Needs', brother: b });
+                    if (b && getBrotherCategory(b) !== 'Elder') out.push({ id: a.id, date, type: 'Pamumuhay', label: isLocalNeedsSlot(date, i) ? 'Local Needs' : 'Living as Christians (elder part)', brother: b });
                 });
                 // v10: ang may tag na "Brother" ay CBS Reader lang
                 assignments.filter(a => a.date === date && isSlotActive(date, a.type)).forEach(a => {
@@ -4035,13 +4403,121 @@ function wbWeekToThursday(label, ctx) {
             const cap = msTalkCap(), byMonth = {};
             assignments.filter(a => a.type === '10 mins talk' && !isNoMeetingWeek(a.date)).sort((x, y) => x.date.localeCompare(y.date)).forEach(a => {
                 const b = brothers.find(x => x.id === a.brotherId);
-                if (b && getBrotherCategory(b) === 'MS') (byMonth[a.date.slice(0, 7)] = byMonth[a.date.slice(0, 7)] || []).push({ a, b });
+                if (b && getBrotherCategory(b) === 'MS') (byMonth[meetingMonthKey(a.date)] = byMonth[meetingMonthKey(a.date)] || []).push({ a, b });
             });
             Object.values(byMonth).forEach(list => list.forEach(({ a, b }, i) => {
                 if (i >= cap && a.date >= fromThu && !out.some(o => o.id === a.id))
                     out.push({ id: a.id, date: a.date, type: a.type, label: typeLabel(a.type), brother: b, rule: 'mstalk' });
             }));
+            // v61: dalawang MS sa Living as Christians sa iisang linggo — ang ikalawa ay dapat elder
+            const lcByDate = {};
+            assignments.filter(a => a.type === 'Pamumuhay' && /^\d{4}-\d{2}-\d{2}$/.test(a.date || '') && a.date >= fromThu && !isNoMeetingWeek(a.date))
+                .forEach(a => { (lcByDate[a.date] = lcByDate[a.date] || []).push(a); });
+            Object.values(lcByDate).forEach(list => {
+                const ms = list.filter(a => isMSBrotherId(a.brotherId));
+                ms.slice(1).forEach(a => { if (!out.some(o => o.id === a.id)) out.push({ id: a.id, date: a.date, type: a.type, label: 'Living as Christians', brother: brothers.find(x => x.id === a.brotherId), rule: 'mslivweek' }); });
+            });
+            // v59: MS sa 15-min na Living as Christians — ang lampas sa N bawat buwan (hindi kasama ang mas maiikling bahagi)
+            const lcap = msLivingTarget(), byMonthL = {};
+            assignments.filter(a => a.type === 'Pamumuhay' && /^\d{4}-\d{2}-\d{2}$/.test(a.date || '') && !isNoMeetingWeek(a.date))
+                .sort((x, y) => x.date.localeCompare(y.date)).forEach(a => {
+                    const b = brothers.find(x => x.id === a.brotherId);
+                    if (!b || getBrotherCategory(b) !== 'MS' || isShortLivingSlot(a.date, pamIndexOf(a))) return;
+                    (byMonthL[meetingMonthKey(a.date)] = byMonthL[meetingMonthKey(a.date)] || []).push({ a, b });
+                });
+            Object.values(byMonthL).forEach(list => list.forEach(({ a, b }, i) => {
+                if (i >= lcap && a.date >= fromThu && !out.some(o => o.id === a.id))
+                    out.push({ id: a.id, date: a.date, type: a.type, label: 'Living as Christians', brother: b, rule: 'msliving' });
+            }));
             return out.sort((x, y) => x.date.localeCompare(y.date));
+        }
+
+        // ==================== v58: buwanang pagsasanay ng MS (10-min talk at Living as Christians) ====================
+        // Mga atas sa mga susunod na linggo ng buwan na hawak ng hindi-MS at puwedeng ibigay sa MS
+        function msSwapSlots(monthKey, type) {
+            const thisThu = thursdayOfWeek(manilaTodayISO());
+            const [y, m] = monthKey.split('-').map(Number);
+            const out = [];
+            getThursdaysForMonthByWeekStart(y, m).filter(d => d > thisThu && !isNoMeetingWeek(d)).forEach(d => {
+                assignments.filter(a => a.date === d && a.type === type).forEach(a => {
+                    const i = type === 'Pamumuhay' ? pamIndexOf(a) : 0; // v62
+                    if (isMSBrotherId(a.brotherId)) return;
+                    if (type === 'Pamumuhay' && (isElderLivingSlot(d, i) || isShortLivingSlot(d, i) || msLivingOnDate(d) > 0)) return;
+                    if (type === '10 mins talk' && msTalkAdjacent(d)) return;
+                    out.push(a);
+                });
+            });
+            return out;
+        }
+        function findMsTargetGaps() {
+            const thisThu = thursdayOfWeek(manilaTodayISO());
+            const months = [...new Set(assignments.filter(a => /^\d{4}-\d{2}-\d{2}$/.test(a.date || '') && a.date > thisThu).map(a => meetingMonthKey(a.date)))].sort();
+            const out = [];
+            months.forEach(mk => {
+                [['10 mins talk', msTalkCap()], ['Pamumuhay', msLivingTarget()]].forEach(([type, want]) => {
+                    if (!want) return;
+                    const have = msCountInMonth(mk, type);
+                    if (have >= want || !msSwapSlots(mk, type).length) return;
+                    out.push({ month: mk, type, have, want });
+                });
+            });
+            return out;
+        }
+        function msTargetFp(g) { return `mt|${g.month}|${g.type}|${g.have}`; }
+        function msMonthLabel(mk) { return new Date(mk + '-15T12:00:00+08:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' }); }
+        function renderMsTargetBanner() {
+            const all = findMsTargetGaps();
+            const accepted = pruneAcceptedWarnings(all.map(msTargetFp), ['mt|']);
+            const list = all.filter(g => !accepted.has(msTargetFp(g)));
+            if (!list.length) return '';
+            const items = list.map(g => `${msMonthLabel(g.month)}: ${g.have} of ${g.want} MS ${g.type === '10 mins talk' ? '10-min talk' : 'on a 15-min Living as Christians part'}`).join(' · ');
+            return `<div class="s38-banner banner-closable"><button class="banner-x" title="Accept these — they will not show again unless the numbers change" onclick="dismissMsTargetBanner()">✕</button>🎓 <b>Training ministerial servants</b> — each month: ${msTalkCap()} MS 10-min talk${msTalkCap() === 1 ? '' : 's'} (not back-to-back) and ${msLivingTarget()} MS on a 15-min Living as Christians part (shorter parts don't count).
+                <div class="s38-list">${items}</div>
+                <button class="btn-primary text-sm" onclick="fixMsTargets()">🎓 Give these to MS</button></div>`;
+        }
+        function dismissMsTargetBanner() {
+            const acc = getAcceptedWarnings();
+            acceptWarnings(findMsTargetGaps().filter(g => !acc.has(msTargetFp(g))).map(msTargetFp));
+            renderGrid();
+        }
+        // Papalitan ang ilang atas ng hindi-MS ng pinakamungkahing MS (parehong fairness engine), hanggang maabot ang target
+        function fixMsTargets() {
+            const acc = getAcceptedWarnings();
+            const gaps = findMsTargetGaps().filter(g => !acc.has(msTargetFp(g)));
+            if (!gaps.length) { alert('Every upcoming month already has its MS 10-min talks and MS part in Living as Christians.'); return; }
+            const original = JSON.parse(JSON.stringify(assignments));
+            const plan = [], stuck = [];
+            gaps.forEach(g => {
+                let have = msCountInMonth(g.month, g.type);
+                // MS na walang bahagi sa katabing pulong lang — para hindi makagawa ng bagong magkasunod na bahagi
+                for (const maxTier of [0]) {
+                    for (const a0 of msSwapSlots(g.month, g.type)) {
+                        if (have >= g.want) break;
+                        const a = assignments.find(x => x.id === a0.id);
+                        if (!a || isMSBrotherId(a.brotherId)) continue;
+                        if (g.type === '10 mins talk' && msTalkAdjacent(a.date)) continue; // nagbago dahil sa naunang palit
+                        const fromId = a.brotherId;
+                        a.brotherId = '__vacant__';
+                        const taken = new Set(assignments.filter(x => x.date === a.date && x.id !== a.id).map(x => x.brotherId));
+                        const pick = (getSuggestionsForSlot(a.date, a.type) || [])
+                            .find(x => getBrotherCategory(x.brother) === 'MS' && !taken.has(x.brother.id) && x.tier <= maxTier);
+                        if (pick) { a.brotherId = pick.brother.id; have++; plan.push({ id: a.id, date: a.date, type: a.type, from: brothers.find(b => b.id === fromId), to: pick.brother }); }
+                        else a.brotherId = fromId;
+                    }
+                }
+                if (have < g.want) stuck.push({ ...g, have });
+            });
+            assignments = original; // preview lang
+            if (!plan.length) { alert('No ministerial servant is free for these weeks without a back-to-back part. Try another month, or assign one by hand.'); return; }
+            const lines = plan.map(p => `• ${shortDate(p.date)} ${typeLabel(p.type)}: ${p.from ? p.from.name : '—'} → ${p.to.name} (MS)`);
+            const left = stuck.map(g => `${msMonthLabel(g.month)} ${g.type === '10 mins talk' ? '10-min talk' : 'Living as Christians'} (${g.have} of ${g.want})`);
+            if (!confirm(`Give ${plan.length} part(s) to ministerial servants?\n\n${lines.join('\n')}` +
+                (left.length ? `\n\nStill short (no free MS without a back-to-back part): ${left.join(', ')}` : '') +
+                `\n\nIf you already shared the S-140 for these months, export it again after this.\nYou can undo with ↩ Undo Last.`)) return;
+            pushAssignmentUndoState();
+            plan.forEach(p => { const a = assignments.find(x => x.id === p.id); if (a) a.brotherId = p.to.id; });
+            saveData();
+            render();
         }
 
         function renderS38ConflictBanner() {
@@ -4049,9 +4525,11 @@ function wbWeekToThursday(label, ctx) {
             if (!list.length) return '';
             const names = list.slice(0, 4).map(c => `${shortDate(c.date)} ${c.label}: ${escHtml(c.brother.name)} (${getBrotherCategory(c.brother)})`).join(' · ');
             const n = r => list.filter(c => (c.rule || 'elder') === r).length;
-            const eldN = n('elder'), broN = n('brother'), rdN = n('reader'), mtN = n('mstalk');
+            const eldN = n('elder'), broN = n('brother'), rdN = n('reader'), mtN = n('mstalk'), lvN = n('msliving'), lwN = n('mslivweek');
             const rules = [eldN ? 'Chairman, CBS conductor and Local Needs are elder-only (S-38)' : '', broN ? 'brothers tagged "Brother" may only be CBS Reader' : '',
-                rdN ? 'CBS Reader goes to ministerial servants and brothers' : '', mtN ? `ministerial servants give the 10-min talk at most ${msTalkCap()}× a month` : ''].filter(Boolean).join('; ');
+                rdN ? 'CBS Reader goes to ministerial servants and brothers' : '', mtN ? `ministerial servants give the 10-min talk at most ${msTalkCap()}× a month` : '',
+                lvN ? `ministerial servants take a 15-min Living as Christians part ${msLivingTarget()}× a month (shorter parts are fine)` : '',
+                lwN ? 'when Living as Christians has two parts, one goes to an elder and one to an MS' : ''].filter(Boolean).join('; ');
             return `<div class="s38-banner">⚠ <b>${list.length} upcoming assignment${list.length === 1 ? '' : 's'}</b> ${list.length === 1 ? 'breaks' : 'break'} the assignment rules — ${rules}. They were made before the rule was added.
                 <div class="s38-list">${names}${list.length > 4 ? ` · …and ${list.length - 4} more` : ''}</div>
                 <button class="btn-primary text-sm" onclick="fixS38Conflicts()">🛠 ${eldN === list.length ? 'Replace with elders' : 'Fix these assignments'}</button></div>`;
@@ -4061,18 +4539,20 @@ function wbWeekToThursday(label, ctx) {
         // nang hindi ginagalaw ang posisyon nito (mahalaga sa Local Needs na nakabatay sa pagkakasunod).
         function fixS38Conflicts() {
             const list = findS38Conflicts();
-            if (!list.length) { alert('No conflicts — every upcoming Chairman, CBS conductor and Local Needs part is held by an elder, brothers tagged "Brother" and no elders are on CBS Reader, and ministerial servants are within the 10-min talk limit.'); return; }
+            if (!list.length) { alert('No conflicts — every upcoming Chairman, CBS conductor and Local Needs part is held by an elder, brothers tagged "Brother" and no elders are on CBS Reader, and ministerial servants are within the 10-min talk and Living as Christians limits.'); return; }
             const original = JSON.parse(JSON.stringify(assignments));
             const plan = [];
             list.forEach(c => {
                 const a = assignments.find(x => x.id === c.id);
                 if (!a) return;
                 const taken = new Set(assignments.filter(x => x.date === c.date && x.id !== c.id).map(x => x.brotherId));
+                const keepId = a.brotherId;
+                a.brotherId = '__vacant__'; // v59: para tama ang slot ng Living as Christians habang pumipili
                 const pick = (getSuggestionsForSlot(c.date, c.type) || [])
                     .find(s => (c.rule || getBrotherCategory(s.brother) === 'Elder') && !taken.has(s.brother.id) && s.brother.id !== c.brother.id);
                 plan.push({ ...c, to: pick ? pick.brother : null });
                 if (pick) a.brotherId = pick.brother.id; // pansamantala, para mabilang sa susunod na pili
-                else assignments = assignments.filter(x => x.id !== c.id);
+                else { a.brotherId = keepId; assignments = assignments.filter(x => x.id !== c.id); }
             });
             assignments = original; // preview lang hanggang pumayag
             const lines = plan.map(p => `• ${shortDate(p.date)} ${p.label}: ${p.brother.name} (${getBrotherCategory(p.brother)}) → ${p.to ? p.to.name : '(left empty — no eligible brother)'}`);
@@ -4090,6 +4570,59 @@ function wbWeekToThursday(label, ctx) {
             render();
             const empty = plan.filter(p => !p.to).length;
             alert(`Replaced ${plan.length - empty} assignment(s).` + (empty ? `\n${empty} slot(s) left empty — assign them manually.` : ''));
+        }
+
+        // ==================== v39: mga atas sa linggong WALANG PULONG (detect + linisin kahit kailan) ====================
+        // Kahit nailagay na ang atas bago namarkahan ang linggo bilang special (assembly/convention/Memorial)
+        // o CO visit, hahanapin at aalisin dito ANUMANG ORAS — hindi lang sa sandaling i-toggle ang week type.
+        function findNoMeetingConflicts() {
+            const fromThu = thursdayOfWeek(manilaTodayISO());
+            const gridItems = [];
+            assignments.filter(a => a.date >= fromThu && !isSlotActive(a.date, a.type)).forEach(a => {
+                const b = brothers.find(x => x.id === a.brotherId);
+                gridItems.push({ id: a.id, date: a.date, type: a.type, label: typeLabel(a.type), brother: b || null });
+            });
+            const studentWeeks = [];
+            listSpecialWeeks().filter(d => d >= fromThu && isNoMeetingWeek(d)).forEach(d => {
+                const n = countStudentNames(d);
+                if (n > 0) studentWeeks.push({ date: d, count: n });
+            });
+            gridItems.sort((x, y) => x.date.localeCompare(y.date));
+            studentWeeks.sort((x, y) => x.date.localeCompare(y.date));
+            const weeks = new Set([...gridItems.map(g => g.date), ...studentWeeks.map(w => w.date)]);
+            return { gridItems, studentWeeks, weeks, total: gridItems.length + studentWeeks.reduce((s, w) => s + w.count, 0) };
+        }
+
+        function renderNoMeetingBanner() {
+            const { gridItems, studentWeeks, weeks, total } = findNoMeetingConflicts();
+            if (!total) return '';
+            const detail = gridItems.slice(0, 4).map(g => `${shortDate(g.date)} ${g.label}${g.brother ? ': ' + escHtml(g.brother.name) : ''}`)
+                .concat(studentWeeks.map(w => `${shortDate(w.date)}: ${w.count} student name(s)`));
+            const shown = detail.slice(0, 4).join(' · ');
+            return `<div class="s38-banner">⚠ <b>${total} part${total === 1 ? '' : 's'}</b> ${total === 1 ? 'is' : 'are'} still assigned on ${weeks.size} week${weeks.size === 1 ? '' : 's'} with no meeting (assembly, convention, Memorial) or on the CBS slot during a CO visit. They were assigned before the week was marked special.
+                <div class="s38-list">${shown}${detail.length > 4 ? ' · …and more' : ''}</div>
+                <button class="btn-primary text-sm" onclick="clearNoMeetingConflicts()">🧹 Clear these</button></div>`;
+        }
+
+        function clearNoMeetingConflicts() {
+            const { gridItems, studentWeeks, weeks, total } = findNoMeetingConflicts();
+            if (!total) { alert('Nothing to clear — no parts are assigned on a no-meeting week or on a CO-visit CBS slot.'); return; }
+            const lines = gridItems.map(g => `• ${shortDate(g.date)} ${g.label}${g.brother ? ': ' + g.brother.name : ''}`)
+                .concat(studentWeeks.map(w => `• ${shortDate(w.date)}: ${w.count} student name(s) (Bible reading / student parts)`));
+            const shown = lines.slice(0, 15).join('\n') + (lines.length > 15 ? `\n…and ${lines.length - 15} more` : '');
+            if (!confirm(`Remove ${total} part(s) from ${weeks.size} no-meeting week(s)?\n\n${shown}\n\nThis clears their names so they don't count in anyone's history.\n(↩ Undo Last restores the grid assignments; cleared student names would need to be re-typed.)`)) return;
+            if (gridItems.length) {
+                pushAssignmentUndoState();
+                const ids = new Set(gridItems.map(g => g.id));
+                assignments = assignments.filter(a => !ids.has(a.id));
+                saveData();
+            }
+            if (studentWeeks.length) {
+                studentWeeks.forEach(w => clearStudentWeek(w.date));
+                saveMeetingEditorData();
+            }
+            render();
+            alert(`Cleared ${total} part(s) from ${weeks.size} no-meeting week(s).`);
         }
 
 
@@ -4168,20 +4701,55 @@ function wbWeekToThursday(label, ctx) {
             });
             return out.sort((x, y) => (x.kind === 'same' ? 0 : 1) - (y.kind === 'same' ? 0 : 1) || x.d1.localeCompare(y.d1));
         }
+        // ==================== v45: per-issue accepted warnings (close = accept this specific one) ====================
+        // Ang pagsasara ng isang babala = "sadya ko ito, tanggap ko na." Iniimbak ang eksaktong isyu (fingerprint),
+        // hindi ang buong set. Hindi na ito babalik maliban kung gagawa ka ng BAGONG magkasunod/ulit. Auto-cleanup:
+        // kapag naresolba na ang isang isyu, aalisin sa tinanggap para kapag inulit sa hinaharap, mag-wawarning muli.
+        function getAcceptedWarnings() {
+            try { return new Set(JSON.parse(localStorage.getItem('nc_acceptedWarnings') || '[]')); } catch (e) { return new Set(); }
+        }
+        function saveAcceptedWarnings(set) { localStorage.setItem('nc_acceptedWarnings', JSON.stringify([...set])); }
+        function acceptWarnings(fps) {
+            if (!fps || !fps.length) return;
+            const set = getAcceptedWarnings();
+            fps.forEach(fp => set.add(fp));
+            saveAcceptedWarnings(set);
+        }
+        function pruneAcceptedWarnings(currentFps, prefixes) {
+            const set = getAcceptedWarnings();
+            const cur = new Set(currentFps);
+            let changed = false;
+            [...set].forEach(fp => { if (prefixes.some(p => fp.startsWith(p)) && !cur.has(fp)) { set.delete(fp); changed = true; } });
+            if (changed) saveAcceptedWarnings(set);
+            return set;
+        }
+        function acceptedWarningCount() { return getAcceptedWarnings().size; }
+        function resetAcceptedWarnings() {
+            if (!getAcceptedWarnings().size) { alert('No closed warnings to bring back.'); return; }
+            if (!confirm('Bring back every consecutive / repeat-part warning you closed, so you can review them again?')) return;
+            localStorage.removeItem('nc_acceptedWarnings');
+            render();
+        }
+        function spacingFp(c) { return `sp|${c.brother.id}|${c.d1}|${c.d2}`; }
+        function monthRepeatFp(m) { return `mo|${m.brother.id}|${m.first.date}|${m.second.date}`; }
+        function studentIssueFp(x) {
+            return x.kind === 'pair'
+                ? `st|pair|${[...x.names].sort().join('~')}|${x.thu}`
+                : `st|cons|${x.names[0]}|${x.d1}|${x.d2}`;
+        }
+
         function renderSpacingBanner() {
-            const list = findSpacingIssues();
-            const months = findMonthRepeats();
+            const listAll = findSpacingIssues();
+            const monthsAll = findMonthRepeats();
+            // v45: per-issue "accept" — isara mo = tinanggap mo iyong eksaktong iyon; hindi na babalik maliban kung gagawa ka ng bago
+            const accepted = pruneAcceptedWarnings(listAll.map(spacingFp).concat(monthsAll.map(monthRepeatFp)), ['sp|', 'mo|']);
+            const list = listAll.filter(c => !accepted.has(spacingFp(c)));
+            const months = monthsAll.filter(m => !accepted.has(monthRepeatFp(m)));
             if (!list.length && !months.length) return '';
-            // v17: puwedeng isara; lalabas ulit kapag may bagong problema (ibang listahan)
-            const sig = spacingSignature(list, months);
-            if (localStorage.getItem('nc_spacingDismissed') === sig) {
-                return `<div class="banner-collapsed">🔁 ${list.length + months.length} spacing note${list.length + months.length === 1 ? '' : 's'} hidden
-                    <button class="banner-link" onclick="showSpacingBanner()">Show</button></div>`;
-            }
             const same = list.filter(c => c.kind === 'same').length;
             const fmt = c => `${escHtml(c.brother.name)} — ${shortDate(c.d1)} ${c.first.map(x => escHtml(x.label)).join(' + ')} → ${shortDate(c.d2)} ${c.second.map(x => escHtml(x.label)).join(' + ')}`;
             const fmtM = m => `${escHtml(m.brother.name)} — ${escHtml(typeLabel(m.first.type))} ${shortDate(m.first.date)} → ${escHtml(typeLabel(m.second.type))} ${shortDate(m.second.date)}`;
-            let h = '<div class="s38-banner banner-closable"><button class="banner-x" title="Close — it comes back only if a new problem appears" onclick="dismissSpacingBanner()">✕</button>';
+            let h = '<div class="s38-banner banner-closable"><button class="banner-x" title="Accept these — they will not show again unless you make a new one" onclick="dismissSpacingBanner()">✕</button>';
             if (list.length) {
                 h += `🔁 <b>${list.length} brother${list.length === 1 ? ' has parts' : 's have parts'} in consecutive meetings</b>` +
                     (same ? ` — ${same} with the <b>same</b> part` : '') + `. Includes Students-tab parts (Bible reading, discussions).
@@ -4199,8 +4767,9 @@ function wbWeekToThursday(label, ctx) {
         // Hindi ginagalaw: ang kasalukuyang linggo (naibigay na), at ang Students tab.
         // Sinusunod pa rin: elder-only, "Brother" = CBS Reader, eligibility, special weeks, at 3 bawat buwan.
         function fixSpacingIssues() {
-            const list = findSpacingIssues();
-            if (!list.length && !findMonthRepeats().length) { alert(`No brother has parts in consecutive meetings, or the same part again within ${REPEAT_GAP_WEEKS} weeks, from this week onward.`); return; }
+            const accepted = getAcceptedWarnings();
+            const list = findSpacingIssues().filter(c => !accepted.has(spacingFp(c)));
+            if (!list.length && !findMonthRepeats().filter(m => !accepted.has(monthRepeatFp(m))).length) { alert(`No brother has parts in consecutive meetings, or the same part again within ${REPEAT_GAP_WEEKS} weeks, from this week onward (accepted ones are skipped).`); return; }
             const thisThu = thursdayOfWeek(manilaTodayISO());
             const original = JSON.parse(JSON.stringify(assignments));
             const plan = [];
@@ -4217,8 +4786,8 @@ function wbWeekToThursday(label, ctx) {
                 for (const t of targets) {
                     const a = assignments.find(x => x.id === t.id);
                     if (!a || a.brotherId !== c.brother.id) continue;
-                    const pamIdx = a.type === 'Pamumuhay' ? assignments.filter(x => x.date === a.date && x.type === 'Pamumuhay').indexOf(a) : -1;
-                    const needElder = a.type === 'Pamumuhay' ? isLocalNeedsSlot(a.date, pamIdx) : requiresElder(a.date, a.type);
+                    const pamIdx = a.type === 'Pamumuhay' ? pamIndexOf(a) : -1; // v62
+                    const needElder = a.type === 'Pamumuhay' ? isElderLivingSlot(a.date, pamIdx) : requiresElder(a.date, a.type);
                     const keep = a.brotherId;
                     a.brotherId = '__vacant__';
                     const taken = new Set(assignments.filter(x => x.date === a.date && x.id !== a.id).map(x => x.brotherId));
@@ -4240,15 +4809,15 @@ function wbWeekToThursday(label, ctx) {
             for (let round = 0; round < 3; round++) {
             monthStuck = [];
             let fixedThisRound = 0;
-            findMonthRepeats().forEach(m => {
+            findMonthRepeats().filter(m => !accepted.has(monthRepeatFp(m))).forEach(m => {
                 const cur = assignments.find(x => x.id === m.second.id);
                 if (!cur || cur.brotherId !== m.brother.id || !monthRepeatOf(m.brother.id, cur.date, cur.type)) return; // naayos na
                 const targets = [m.second, m.first].filter(x => x.date > thisThu);
                 for (const t of targets) {
                     const a = assignments.find(x => x.id === t.id);
                     if (!a || a.brotherId !== m.brother.id) continue;
-                    const pamIdx = a.type === 'Pamumuhay' ? assignments.filter(x => x.date === a.date && x.type === 'Pamumuhay').indexOf(a) : -1;
-                    const needElder = a.type === 'Pamumuhay' ? isLocalNeedsSlot(a.date, pamIdx) : requiresElder(a.date, a.type);
+                    const pamIdx = a.type === 'Pamumuhay' ? pamIndexOf(a) : -1; // v62
+                    const needElder = a.type === 'Pamumuhay' ? isElderLivingSlot(a.date, pamIdx) : requiresElder(a.date, a.type);
                     const keep = a.brotherId;
                     a.brotherId = '__vacant__';
                     const taken = new Set(assignments.filter(x => x.date === a.date && x.id !== a.id).map(x => x.brotherId));
@@ -4331,7 +4900,7 @@ function wbWeekToThursday(label, ctx) {
                 else missing.push(`${shortDate(thu)} #3 Bible Reading`);
                 (md.ministryParts || []).forEach((part, i) => {
                     const kind = getPartKind(part);
-                    if (kind === 'discussion' || !STUDENT_KINDS[kind]?.student) return;
+                    if (isLeaderKind(kind) || !STUDENT_KINDS[kind]?.student) return;
                     const no = partNumberOf(part.title, 4 + i);
                     const stu = (part.name || '').trim();
                     if (!stu) { missing.push(`${shortDate(thu)} #${no} ${STUDENT_KINDS[kind].short}`); return; }
@@ -4369,43 +4938,64 @@ function wbWeekToThursday(label, ctx) {
             return { t, s };
         }
 
-        async function buildS89Pdf(slips) {
-            if (typeof PDFLib === 'undefined') throw new Error('The PDF library (lib/pdf-lib.min.js) did not load. Please refresh the page.');
-            if (typeof S89_BASE_B64 === 'undefined') throw new Error('The S-89 template (lib/s89-base.js) did not load.');
-            const { PDFDocument, StandardFonts, rgb } = PDFLib;
-            const doc = await PDFDocument.create();
-            doc.setTitle('S-89 Our Christian Life and Ministry Meeting Assignment');
-            doc.setCreator('Assignment Tracker');
-            const [form] = await doc.embedPdf(base64ToBytes(S89_BASE_B64), [0]);
-            const font = await doc.embedFont(StandardFonts.Helvetica);
-            const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-            const PW = 612, PH = 792;                                   // Letter
-            const ox = (PW - 2 * S89_W) / 2, oy = (PH - 2 * S89_H) / 2;
-            const ink = rgb(0.08, 0.08, 0.12), cut = rgb(0.72, 0.72, 0.72);
-            let page = null;
-            slips.forEach((sl, i) => {
-                const pos = i % 4;
-                if (pos === 0) page = doc.addPage([PW, PH]);
-                const col = pos % 2, row = Math.floor(pos / 2);
-                const x0 = ox + col * S89_W, y0 = oy + (1 - row) * S89_H;
-                page.drawPage(form, { x: x0, y: y0, width: S89_W, height: S89_H });
-                page.drawRectangle({ x: x0, y: y0, width: S89_W, height: S89_H, borderColor: cut, borderWidth: 0.5, borderDashArray: [3, 3] });
-                const write = (field, text, f = font, size = 10) => {
-                    if (!text) return;
-                    const F = S89_FIELDS[field];
-                    const { t, s } = s89FitText(f, text, F.max, size);
-                    page.drawText(t, { x: x0 + F.x, y: y0 + F.y, size: s, font: f, color: ink });
-                };
-                write('name', sl.student, bold, 10.5);
-                write('assistant', sl.assistant);
-                write('date', new Date(sl.thu + 'T12:00:00+08:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }));
-                write('part', `${sl.partNo} — ${sl.title}`);
-                // ☒ Main hall (walang auxiliary class)
-                const cx = x0 + S89_MAIN_HALL.x, cy = y0 + S89_MAIN_HALL.y, r = 3.2;
-                page.drawLine({ start: { x: cx - r, y: cy - r }, end: { x: cx + r, y: cy + r }, thickness: 1.2, color: ink });
-                page.drawLine({ start: { x: cx - r, y: cy + r }, end: { x: cx + r, y: cy - r }, thickness: 1.2, color: ink });
+        // v37: isa-isang JPEG slip sa natural na laki ng S-89 (sa ibabaw ng naka-embed na form image, lib/s89-image.js)
+        let _s89ImgPromise = null;
+        function loadS89Image() {
+            if (_s89ImgPromise) return _s89ImgPromise;
+            _s89ImgPromise = new Promise((resolve, reject) => {
+                if (typeof S89_IMG_B64 === 'undefined') { reject(new Error('The S-89 form image (lib/s89-image.js) did not load. Please refresh the page.')); return; }
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = () => reject(new Error('Could not load the S-89 form image.'));
+                img.src = 'data:image/png;base64,' + S89_IMG_B64;
             });
-            return await doc.save();
+            return _s89ImgPromise;
+        }
+        // Ligtas na filename (ISO-date para maayos ang pagkakasunod-sunod, + part no. + pangalan)
+        function s89FileName(slip) {
+            const who = (slip.student || 'TBA').replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, ' ').trim() || 'TBA';
+            return `S-89 ${slip.thu} #${slip.partNo} ${who}.jpg`;
+        }
+        // Isang slip -> JPEG Blob (natural na laki ng S-89, ang image ang background)
+        async function buildS89Jpeg(slip, img) {
+            const W = (typeof S89_IMG_W !== 'undefined' ? S89_IMG_W : img.naturalWidth);
+            const H = (typeof S89_IMG_H !== 'undefined' ? S89_IMG_H : img.naturalHeight);
+            const canvas = document.createElement('canvas');
+            canvas.width = W; canvas.height = H;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+            ctx.drawImage(img, 0, 0, W, H);
+            ctx.fillStyle = '#15151f';
+            ctx.textBaseline = 'alphabetic';
+            // Ang S89_FIELDS/S89_MAIN_HALL ay nasa 241x320 na logical space; i-scale sa pixel ng image.
+            const SX = W / S89_W, SY = H / S89_H;
+            const setFont = (px, bold) => { ctx.font = `${bold ? 'bold ' : ''}${px}px Helvetica, Arial, sans-serif`; };
+            const write = (field, text, bold, size) => {
+                if (!text) return;
+                const F = S89_FIELDS[field];
+                const maxPx = F.max * SX, min = 6.5 * SX;
+                let t = String(text).replace(/\s+/g, ' ').trim(), s = (size || 10) * SX;
+                setFont(s, bold);
+                while (s > min && ctx.measureText(t).width > maxPx) { s -= 0.5 * SX; setFont(s, bold); }
+                if (ctx.measureText(t).width > maxPx) {
+                    while (t.length > 1 && ctx.measureText(t + '…').width > maxPx) t = t.slice(0, -1);
+                    t = t.trimEnd() + '…'; setFont(s, bold);
+                }
+                ctx.fillText(t, F.x * SX, (S89_H - F.y) * SY);
+            };
+            write('name', slip.student, true, 10.5);
+            write('assistant', slip.assistant, false, 10);
+            // v47: week range (tugma sa S-140) imbes na specific na petsa — mas madaling hanapin, lalo na't hindi Huwebes ang pulong
+            write('date', s140WeekLabel(slip.thu), false, 10);
+            write('part', `${slip.partNo} — ${slip.title}`, false, 10);
+            // ☒ Main hall (walang auxiliary class)
+            const cx = S89_MAIN_HALL.x * SX, cy = (S89_H - S89_MAIN_HALL.y) * SY, r = 3.2 * SX;
+            ctx.strokeStyle = '#15151f'; ctx.lineWidth = Math.max(1.5, 1.2 * SX); ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r);
+            ctx.moveTo(cx - r, cy + r); ctx.lineTo(cx + r, cy - r);
+            ctx.stroke();
+            return await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.92));
         }
 
         async function exportS89Slips() {
@@ -4431,13 +5021,21 @@ function wbWeekToThursday(label, ctx) {
             if (pastWeeks) notes.push(`${pastWeeks} past week(s) skipped.`);
             if (noMeetingWeeks) notes.push(`${noMeetingWeeks} no-meeting week(s) skipped.`);
             const pages = Math.ceil(slips.length / 4);
-            if (!confirm(`Make ${slips.length} S-89 slip(s) for ${label} — ${pages} page(s), 4 per page?\n\n${notes.join('\n\n')}${notes.length ? '\n\n' : ''}Print at 100% (Actual size) on Letter paper, then cut on the dashed lines.`)) return;
+            if (!confirm(`Make ${slips.length} S-89 slip(s) for ${label} — one JPEG each.\n\n${notes.join('\n\n')}${notes.length ? '\n\n' : ''}Each slip is a separate image at the natural S-89 size, saved to the "S-89\\${monthFolderName(year, month)}" folder inside your schedule folder — ready to send straight to Messenger (no download needed on their end).`)) return;
             try {
-                const bytes = await buildS89Pdf(slips);
-                const name = `S-89 ${label}.pdf`;
-                // v28: kasama ng S-140 sa "schedule" folder
-                const where = await saveToSchedule(name, new Blob([bytes], { type: 'application/pdf' }));
-                alert(where === 'folder' ? `Saved ${name} to the "${lastSaveFolderName || 'schedule'}" folder!` : `Downloaded ${name} (it went to your Downloads folder).`);
+                const img = await loadS89Image();
+                const files = [];
+                for (const sl of slips) {
+                    const blob = await buildS89Jpeg(sl, img);
+                    files.push({ name: s89FileName(sl), blob });
+                }
+                // v56: isa-isang JPEG, sa schedule\S-89\<buwan> (hal. schedule\S-89\2026-11 November)
+                const res = await saveManyToSchedulePath(['S-89', monthFolderName(year, month)], files);
+                if (res.where === 'folder') {
+                    alert(`Saved ${res.saved} S-89 slip(s) as JPEG to the "${res.folder}" folder.`);
+                } else {
+                    alert(`Downloaded ${files.length} S-89 slip(s) as JPEG to your Downloads folder.${res.error ? '\n\n(' + res.error + ')' : ''}`);
+                }
             } catch (e) {
                 alert('Error making the S-89 slips: ' + e.message);
             }
@@ -4648,6 +5246,7 @@ function wbWeekToThursday(label, ctx) {
                 add(md.bibleReadingName, m[1], 'Bible Reading');
                 (md.ministryParts || []).forEach(p => {
                     const kind = getPartKind(p);
+                    if (kind === 'chairman') return; // kasama na sa atas ng chairman
                     const lbl = STUDENT_KINDS[kind]?.short || 'Student part';
                     add(p.name, m[1], lbl);
                     if (STUDENT_KINDS[kind]?.assistant) add(p.assistant, m[1], `${lbl} (assistant)`);
@@ -4676,16 +5275,41 @@ function wbWeekToThursday(label, ctx) {
             const n = parseInt(meetingSettings.msTalkMax, 10);
             return isNaN(n) ? 2 : Math.max(0, n);
         }
+        // v58: buwan ng pulong = buwan ng Lunes ng linggo (kapareho ng getThursdaysForMonthByWeekStart at ng auto-assign)
+        function meetingMonthKey(thu) {
+            const mon = new Date(new Date(thu + 'T12:00:00+08:00').getTime() - 3 * 86400000);
+            return `${mon.getFullYear()}-${String(mon.getMonth() + 1).padStart(2, '0')}`;
+        }
+        function msLivingTarget() { const n = parseInt(meetingSettings.msLivingMin, 10); return isNaN(n) ? 1 : Math.max(0, n); }
+        function isMSBrotherId(id) { const b = brothers.find(x => x.id === id); return !!b && getBrotherCategory(b) === 'MS'; }
+        function msCountInMonth(monthKey, type, exceptDate) {
+            return assignments.filter(a => a.type === type && a.date !== exceptDate && /^\d{4}-\d{2}-\d{2}$/.test(a.date || '') &&
+                meetingMonthKey(a.date) === monthKey && !isNoMeetingWeek(a.date) && isMSBrotherId(a.brotherId) &&
+                (type !== 'Pamumuhay' || !isShortLivingSlot(a.date, pamIndexOf(a)))).length; // v59: Living = 15-min na bahagi lang
+        }
+        // v58: may MS na 10-min talk sa katabing pulong? (hindi magkasunod ang talk ng mga MS)
+        function msTalkAdjacent(date) {
+            const near = [adjacentMeeting(date, -1), adjacentMeeting(date, 1)].filter(Boolean);
+            return assignments.some(a => a.type === '10 mins talk' && near.includes(a.date) && isMSBrotherId(a.brotherId));
+        }
+        // v61: ilang MS ang may Living-as-Christians na bahagi sa linggong ito (hindi kasama ang pinapalitang slot)
+        function msLivingOnDate(date) {
+            return assignments.filter(a => a.type === 'Pamumuhay' && a.date === date && isMSBrotherId(a.brotherId)).length;
+        }
         function msTalkCount(date) {
-            const m = (date || '').slice(0, 7);
-            return assignments.filter(a => a.type === '10 mins talk' && a.date !== date && a.date.slice(0, 7) === m && !isNoMeetingWeek(a.date))
-                .filter(a => getBrotherCategory(brothers.find(b => b.id === a.brotherId)) === 'MS').length;
+            return msCountInMonth(meetingMonthKey(date), '10 mins talk', date);
         }
         function roleRuleViolation(brother, date, type) {
             if (!brother) return '';
             const cat = getBrotherCategory(brother);
             if (type === 'CBS Reader' && cat === 'Elder') return 'reader';
             if (type === '10 mins talk' && cat === 'MS' && date && msTalkCount(date) >= msTalkCap()) return 'mstalk';
+            if (type === '10 mins talk' && cat === 'MS' && date && msTalkAdjacent(date)) return 'mstalkadj';
+            // v61: kapag dalawa ang bahagi sa Living as Christians — isang elder at isang MS, hindi dalawang MS
+            if (type === 'Pamumuhay' && cat === 'MS' && date && msLivingOnDate(date) >= 1) return 'mslivweek';
+            // v59: MS sa 15-min na Living as Christians — isang beses lang bawat buwan (ang mas maiikling bahagi ay puwede)
+            if (type === 'Pamumuhay' && cat === 'MS' && date && !isShortLivingSlot(date, nextPamumuhaySlot(date)) &&
+                msCountInMonth(meetingMonthKey(date), 'Pamumuhay', date) >= msLivingTarget()) return 'msliving';
             return '';
         }
         function confirmRoleRule(brotherId, type, date) {
@@ -4693,6 +5317,9 @@ function wbWeekToThursday(label, ctx) {
             const v = roleRuleViolation(b, date, type);
             if (!v) return true;
             if (v === 'reader') return confirm(`CBS Reader goes to ministerial servants and brothers. ${b.name} is an elder.\n\nAssign anyway?`);
+            if (v === 'mslivweek') return confirm(`A ministerial servant already has the other Living as Christians part this week. When there are two parts, one goes to an elder and one to an MS.\n\n${b.name} is MS. Assign anyway?`);
+            if (v === 'msliving') return confirm(`Ministerial servants take a 15-min Living as Christians part ${msLivingTarget()} time(s) a month — this month already has ${msCountInMonth(meetingMonthKey(date), 'Pamumuhay', date)}. Parts shorter than 15 minutes are fine.\n\n${b.name} is MS. Assign anyway?`);
+            if (v === 'mstalkadj') return confirm(`A ministerial servant already gives the 10-min talk the meeting before or after. MS talks are spread out, not back-to-back.\n\n${b.name} is MS. Assign anyway?`);
             const month = new Date(date + 'T12:00:00+08:00').toLocaleDateString('en-US', { month: 'long' });
             return confirm(`Ministerial servants give the 10-min talk at most ${msTalkCap()} time(s) a month — ${month} already has ${msTalkCount(date)}.\n\n${b.name} is MS. Assign anyway?`);
         }
@@ -4730,7 +5357,7 @@ function wbWeekToThursday(label, ctx) {
                 addItem(md.bibleReadingId || findPersonByName(md.bibleReadingName)?.id, thu, 'bible', 'student');
                 (md.ministryParts || []).forEach((part, i) => {
                     const kind = getPartKind(part);
-                    if (kind === 'discussion') return;
+                    if (isLeaderKind(kind)) return;
                     const sid = part.studentId || findPersonByName(part.name)?.id;
                     const aid = STUDENT_KINDS[kind]?.assistant ? (part.assistantId || findPersonByName(part.assistant)?.id) : null;
                     addItem(sid, thu, i, 'student');
@@ -4766,19 +5393,28 @@ function wbWeekToThursday(label, ctx) {
             return issues.sort((a, b) => a.thu.localeCompare(b.thu));
         }
         function renderStudentIssuesBanner() {
-            const list = findStudentIssues();
+            const listAll = findStudentIssues();
+            const accepted = pruneAcceptedWarnings(listAll.map(studentIssueFp), ['st|']);
+            const list = listAll.filter(x => !accepted.has(studentIssueFp(x)));
             if (!list.length) return '';
             const pairs = list.filter(x => x.kind === 'pair'), cons = list.filter(x => x.kind === 'consecutive');
             const ex = list.slice(0, 5).map(x => x.kind === 'pair'
                 ? `${escHtml(x.names[0])} & ${escHtml(x.names[1])} again on ${shortDate(x.thu)} (first ${shortDate(x.d1)})`
                 : `${escHtml(x.names[0])} — ${shortDate(x.d1)} & ${shortDate(x.d2)}`).join(' · ');
-            return `<div class="s38-banner">🔁 <b>${[pairs.length ? `${pairs.length} repeated partner${pairs.length === 1 ? '' : 's'}` : '', cons.length ? `${cons.length} back-to-back part${cons.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ')}</b> from next week on.
+            return `<div class="s38-banner banner-closable"><button class="banner-x" title="Accept these — they will not show again unless you make a new one" onclick="dismissStudentIssuesBanner()">✕</button>🔁 <b>${[pairs.length ? `${pairs.length} repeated partner${pairs.length === 1 ? '' : 's'}` : '', cons.length ? `${cons.length} back-to-back part${cons.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ')}</b> from next week on.
                 <div class="s38-list">${ex}${list.length > 5 ? ` · …and ${list.length - 5} more` : ''}</div>
                 <button class="btn-primary text-sm" onclick="startStudentFix()">🔁 Fix these</button></div>`;
         }
+        function dismissStudentIssuesBanner() {
+            const accepted = getAcceptedWarnings();
+            const list = findStudentIssues().filter(x => !accepted.has(studentIssueFp(x)));
+            acceptWarnings(list.map(studentIssueFp));
+            renderStudentsView();
+        }
         function startStudentFix() {
-            const list = findStudentIssues();
-            if (!list.length) { alert('No repeated partners or back-to-back student parts from next week on.'); return; }
+            const accepted = getAcceptedWarnings();
+            const list = findStudentIssues().filter(x => !accepted.has(studentIssueFp(x)));
+            if (!list.length) { alert('No repeated partners or back-to-back student parts from next week on (accepted ones are skipped).'); return; }
             const pairs = list.filter(x => x.kind === 'pair').length, cons = list.length - pairs;
             startStudentAutoAssign({ clears: list.map(x => ({ thu: x.thu, slot: x.slot, role: x.role })),
                 fixInfo: [pairs ? `${pairs} repeated partner(s)` : '', cons ? `${cons} back-to-back part(s)` : ''].filter(Boolean).join(', ') });
@@ -4996,11 +5632,11 @@ function findMonthRepeats() {
                 .concat(months.map(m => `m|${m.brother.id}|${m.first.id}|${m.second.id}`)).sort().join(';');
         }
         function dismissSpacingBanner() {
-            localStorage.setItem('nc_spacingDismissed', spacingSignature());
-            renderGrid();
-        }
-        function showSpacingBanner() {
-            localStorage.removeItem('nc_spacingDismissed');
+            // v45: tanggapin ang eksaktong mga babalang kasalukuyang nakikita (hindi buong set)
+            const accepted = getAcceptedWarnings();
+            const list = findSpacingIssues().filter(c => !accepted.has(spacingFp(c)));
+            const months = findMonthRepeats().filter(m => !accepted.has(monthRepeatFp(m)));
+            acceptWarnings(list.map(spacingFp).concat(months.map(monthRepeatFp)));
             renderGrid();
         }
 
@@ -5368,6 +6004,13 @@ function findMonthRepeats() {
                             if (k.c.bottom.val === 'thinThickSmallGap') {
                                 page.drawRectangle({ x: k.x, y: bottomY + 2.25, width: k.w, height: 0.6, color: col });
                                 page.drawRectangle({ x: k.x, y: bottomY, width: k.w, height: 1.5, color: col });
+                            } else if (k.c.bottom.val === 'dashed' || k.c.bottom.val === 'dotted') {
+                                // v34: tuldok-tuldok / putol-putol na linya — gumuhit ng maikling mga segment
+                                const h = Math.max(0.6, k.c.bottom.sz / 8);
+                                const dash = k.c.bottom.val === 'dotted' ? h * 1.5 : 5.4, gap = k.c.bottom.val === 'dotted' ? h * 1.6 : 3.2;
+                                for (let dx = 0; dx < k.w - 0.1; dx += dash + gap) {
+                                    page.drawRectangle({ x: k.x + dx, y: bottomY, width: Math.min(dash, k.w - dx), height: h, color: col });
+                                }
                             } else page.drawRectangle({ x: k.x, y: bottomY, width: k.w, height: Math.max(0.5, k.c.bottom.sz / 8), color: col });
                         }
                     });

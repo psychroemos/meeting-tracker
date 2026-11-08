@@ -1,5 +1,5 @@
 /* Service Worker for Assignment Tracker – Bagong Kongregasyon (NC) */
-const CACHE_NAME = 'nc-cache-v33';
+const CACHE_NAME = 'nc-cache-v62';
 const ASSETS = [
   './',
   './index.html',
@@ -13,6 +13,8 @@ const ASSETS = [
   './lib/fontkit.umd.min.js',
   './lib/s140-fonts.js',
   './lib/s89-base.js',
+  './lib/s89-image.js',
+  './lib/wb-context.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-512-maskable.png'
@@ -20,7 +22,7 @@ const ASSETS = [
 
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()) // v62: laging kunin ang bagong file, hindi ang naka-cache sa browser
   );
 });
 

@@ -25,7 +25,7 @@
             <!-- Header -->
             <div class="card p-8 mb-8">
                 <h1 class="text-4xl font-bold text-gray-900 mb-2">📋 Assignment Tracker – Bagong Kongregasyon</h1>
-                <p class="text-gray-600 text-lg">Manage Thursday midweek meeting assignments fairly & easily <span id="appVersion" title="App version — if this does not show the latest version, close and reopen the app" style="font-size:12px;color:#9ca3af;margin-left:6px;"></span></p>
+                <p class="text-gray-600 text-lg">Manage midweek meeting assignments fairly & easily <span id="appVersion" title="App version — if this does not show the latest version, close and reopen the app" style="font-size:12px;color:#9ca3af;margin-left:6px;"></span></p>
             </div>
 
             <!-- Backup reminder banner -->
@@ -68,13 +68,13 @@
                         <button onclick="exportData()" class="btn-secondary" title="Save data to a JSON file">
                             💾 Save/Export
                         </button>
-                        <button onclick="document.getElementById('importFileInput').click()" class="btn-secondary" title="Import data from a JSON file">
+                        <button onclick="document.getElementById('importFileInput').click()" class="btn-secondary" title="Import a JSON backup, or a Midweek Meeting Schedule PDF (names only, preview first)">
                             📂 Import
                         </button>
                         <button onclick="exportToExcel()" class="btn-secondary" title="Export to Excel with colored grids">
                             📊 Excel
                         </button>
-                        <input type="file" id="importFileInput" accept=".json" onchange="importDataFromFile(event)" class="hidden">
+                        <input type="file" id="importFileInput" accept=".json,.pdf,application/pdf" onchange="importDataFromFile(event)" class="hidden">
                     </div>
                 </div>
             </div>
@@ -115,11 +115,16 @@
                         <div class="flex gap-2 flex-wrap">
                             <button onclick="document.getElementById('workbookFileInput').click()" class="btn-secondary" title="Import part titles, minutes & songs from a JW Meeting Workbook EPUB">📥 Import Workbook</button>
                             <input type="file" id="workbookFileInput" accept=".epub" onchange="handleWorkbookImport(event)" class="hidden">
+                            <button onclick="document.getElementById('schedulePdfInput').click()" class="btn-secondary" title="Import names from a Midweek Meeting Schedule PDF — shows a preview first">📥 Import Schedule (PDF)</button>
+                            <input type="file" id="schedulePdfInput" accept=".pdf,application/pdf" onchange="handleSchedulePdfImport(event)" class="hidden">
                             <button onclick="exportS140Pdf()" class="btn-primary" title="Export the whole month as an S-140 PDF (saved to the schedule folder)">📄 Export S-140 (PDF)</button>
                             <button onclick="changeScheduleFolder()" class="btn-secondary text-sm" title="Choose a different folder for the S-140 and S-89 PDFs">📁</button>
                         </div>
                     </div>
                     
+                    <!-- v63: laging nakikita habang nag-i-scroll — buwan, mga linggo, ↑ Top, Export -->
+                    <div id="seNavBar" class="se-nav"></div>
+
                     <div id="meetingSettingsPanel" class="mb-4"></div>
                     <div id="specialWeeksPanel" class="mb-4"></div>
 
@@ -255,6 +260,26 @@
     </div>
 
     <!-- Import Workbook Preview Modal -->
+    <!-- v64: Import Schedule (PDF) preview -->
+    <div id="pdfImportModal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 z-50">
+        <div class="card modal-card shadow-2xl max-w-3xl w-full max-h-[85vh] overflow-hidden">
+            <div class="sticky top-0 bg-white border-b-2 border-gray-200 p-6">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <h3 class="text-xl font-semibold text-gray-900 mb-1">📥 Import Schedule (PDF) — Preview</h3>
+                        <p class="text-gray-600 text-sm" id="pdfImportSummary">Review the changes before applying.</p>
+                    </div>
+                    <button onclick="closePdfImportModal()" class="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
+                </div>
+            </div>
+            <div class="modal-scroll p-6" id="pdfImportContent"></div>
+            <div class="border-t-2 border-gray-200 p-4 flex gap-2">
+                <button onclick="applyPdfImport()" class="btn-primary flex-1" id="pdfImportApplyBtn">✅ Apply</button>
+                <button onclick="closePdfImportModal()" class="btn-secondary flex-1">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <div id="workbookModal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 z-50">
         <div class="card modal-card shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden">
             <div class="sticky top-0 bg-white border-b-2 border-gray-200 p-6">

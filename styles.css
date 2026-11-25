@@ -451,3 +451,70 @@ textarea.se-in { resize: none; overflow: hidden; line-height: 1.3; display: bloc
     .se-name { grid-column: 2; }
     .se-bar, .se-date { grid-column: 1 / 3; }
 }
+
+/* ===== v63: sticky na bar ng Schedule Editor ===== */
+.se-nav { position: sticky; top: 0; z-index: 40; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 6px 10px; margin-bottom: 14px;
+    box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08); }
+.se-nav:empty { display: none; }
+.se-nav-month { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.se-nav-label { font-weight: 700; font-size: 14px; color: #111827; min-width: 110px; text-align: center; }
+.se-nav-weeks { display: flex; gap: 6px; flex: 1 1 auto; overflow-x: auto; scrollbar-width: thin; padding: 2px 0; }
+.se-nav-actions { display: flex; gap: 6px; flex: 0 0 auto; margin-left: auto; }
+.se-nav-btn { border: 1px solid #d1d5db; background: #f9fafb; color: #374151; border-radius: 6px; padding: 4px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.se-nav-btn:hover { background: #eef2f7; }
+.se-nav-export { padding: 4px 12px; font-size: 13px; white-space: nowrap; }
+.se-chip { border: 1px solid #d1d5db; background: #fff; color: #374151; border-radius: 999px; padding: 3px 12px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.se-chip:hover { border-color: #9ca3af; background: #f9fafb; }
+.se-chip-on { background: #1e3a5f; border-color: #1e3a5f; color: #fff; }
+.se-chip-on:hover { background: #24476f; }
+.se-chip-off { color: #9ca3af; border-style: dashed; }
+.se-chip-dot { color: #d97706; font-size: 9px; vertical-align: middle; }
+.se-chip-on .se-chip-dot { color: #fbbf24; }
+@media (max-width: 760px) {
+    .se-nav-weeks { order: 3; flex-basis: 100%; }
+    .se-nav-label { min-width: 0; }
+}
+
+/* ===== v64: Import Schedule (PDF) preview ===== */
+.pdi-names { border: 1px solid #fcd34d; background: #fffbeb; border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; }
+.pdi-h { font-weight: 700; color: #92400e; margin-bottom: 6px; font-size: 14px; }
+.pdi-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 3px 0; font-size: 14px; }
+.pdi-name-row select { border: 1px solid #d1d5db; border-radius: 6px; padding: 3px 6px; font-size: 13px; background: #fff; min-width: 220px; }
+.pdi-pdfname { font-weight: 600; color: #111827; min-width: 170px; }
+.pdi-week { border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
+.pdi-wk { background: #f3f4f6; font-weight: 700; padding: 6px 10px; font-size: 13px; color: #374151; }
+.pdi-row { display: grid; grid-template-columns: 22px minmax(0, 1.3fr) minmax(0, 1fr) 16px minmax(0, 1.2fr); gap: 6px; align-items: baseline; padding: 5px 10px; border-top: 1px solid #f3f4f6; font-size: 13px; cursor: pointer; }
+.pdi-row:hover { background: #fafafa; }
+.pdi-part { color: #374151; }
+.pdi-from { color: #6b7280; text-decoration: line-through; text-decoration-color: #d1d5db; }
+.pdi-to { color: #111827; }
+.pdi-arrow { color: #9ca3af; }
+.pdi-nobox { display: inline-block; width: 13px; }
+.pdi-note { font-size: 12px; color: #92400e; background: #fffbeb; padding: 4px 10px; border-top: 1px solid #fde68a; }
+.pdi-warn { color: #b45309; font-size: 12px; }
+.pdi-muted { color: #9ca3af; font-size: 12px; }
+.pdi-pad { padding: 4px 10px 6px; }
+@media (max-width: 640px) { .pdi-row { grid-template-columns: 22px 1fr; } .pdi-from, .pdi-arrow { display: none; } .pdi-to { grid-column: 2; } }
+
+/* ===== v67: Lokal na Pangangailangan text field sa Schedule Editor ===== */
+.se-lnin::placeholder { color: #92400e; font-weight: 700; font-style: normal; }
+
+/* ===== v69: S-89 para sa isang bahagi / isang linggo ===== */
+.stu-weekbar-r { display:flex; align-items:center; gap:10px; }
+.stu-s89wk { background:rgba(255,255,255,.18); color:#fff; border:1px solid rgba(255,255,255,.55); border-radius:6px; padding:2px 8px; font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; }
+.stu-s89wk:hover { background:rgba(255,255,255,.32); }
+.stu-s89 { border:1px solid #d1d5db; background:#fff; cursor:pointer; font-size:14px; padding:2px 7px; border-radius:6px; line-height:1.2; margin-left:auto; }
+.stu-s89:hover { background:#fffbeb; border-color:#f59e0b; }
+.se-s89wk { display:flex; justify-content:flex-end; margin:2px 0 4px; }
+
+/* ===== v70: mensahe sa page (toast) ===== */
+.app-toast-box { position: fixed; right: 16px; bottom: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; max-width: min(440px, calc(100vw - 32px)); }
+.app-toast { display: flex; gap: 10px; align-items: flex-start; background: #1f2937; color: #fff; border-radius: 10px; padding: 10px 12px; box-shadow: 0 8px 24px rgba(0,0,0,.25); font-size: 13px; line-height: 1.45; }
+.app-toast-ok { background: #065f46; }
+.app-toast-warn { background: #92400e; }
+.app-toast-err { background: #991b1b; }
+.app-toast-msg { flex: 1; white-space: normal; word-break: break-word; }
+.app-toast-x { background: none; border: 0; color: rgba(255,255,255,.8); cursor: pointer; font-size: 14px; line-height: 1; padding: 2px; }
+.app-toast-x:hover { color: #fff; }
+.stu-s89:disabled, .stu-s89wk:disabled { opacity: .6; cursor: progress; }

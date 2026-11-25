@@ -1,5 +1,5 @@
 /* Service Worker for Assignment Tracker – Bagong Kongregasyon (NC) */
-const CACHE_NAME = 'nc-cache-v62';
+const CACHE_NAME = 'nc-cache-v71';
 const ASSETS = [
   './',
   './index.html',
@@ -15,6 +15,8 @@ const ASSETS = [
   './lib/s89-base.js',
   './lib/s89-image.js',
   './lib/wb-context.js',
+  './lib/pdf.min.js',
+  './lib/pdf.worker.min.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-512-maskable.png'
